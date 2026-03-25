@@ -1,135 +1,230 @@
-# K8s OpenClaw Manager
+# OpenClaw Manager
 
-一个用于管理多个 OpenClaw 实例 Kubernetes 部署配置的可视化管理工具，支持 YAML 编辑、表单配置、一键发布和内置终端。
+一个用于管理多个 OpenClaw 实例的可视化 Web 管理平台，支持 Kubernetes 部署、本地安装和实例注册，提供配置编辑、实时部署监控、终端等功能。
 
-## 功能特性
+---
 
-- **多实例管理** — 创建、查看、删除多个 OpenClaw 部署实例，每个实例独立一套 YAML 文件
-- **可视化编辑** — Monaco Editor 提供 YAML 语法高亮编辑器，支持折叠、格式化
-- **表单模式** — 针对 Deployment、PVC、Service、ConfigMap 提供结构化表单，无需手写 YAML
-- **一键发布** — 调用 `kubectl apply -k` 部署，实时流式输出部署日志
-- **内置终端** — 集成全功能 Linux 终端（xterm.js + PTY），可执行任意命令
+## 功能概览
+
+### 实例管理
+- **创建实例（Deploy New）**：填写名称、选择部署方式，自动初始化目录和配置文件
+  - **Local**：自动执行 `npm install -g openclaw@latest`，实时流式展示安装日志
+  - **Kubernetes**：自动生成 YAML 模板（Deployment、Service、PVC、ConfigMap、Secret、Kustomization），支持自定义或自动生成 Gateway Token
+- **注册实例（Register Only）**：只创建实例目录和元数据，不做任何安装或部署，用于接入已有 OpenClaw 实例
+- **删除实例**：二次确认防误操作
+
+### 实例详情（四个 Tab）
+
+| Tab | 说明 |
+|-----|------|
+| **Info** | 显示实例名称、部署类型、创建时间、Gateway Token（默认加密，点击眼睛图标显示） |
+| **Connect** | 配置 WebSocket 地址和 Token 并连接 Gateway；连接后可查看 Agents、Channels、Models |
+| **Config** | 可视化编辑 openclaw.json（Agents、Bindings、Providers、Channels），支持 Raw JSON 模式；Local 实例自动加载 `~/.openclaw/openclaw.json`，Kubernetes 实例通过 Pod 选择器读取 |
+| **Deploy** | Kubernetes：编辑 YAML 文件（Form/YAML 双模式）并一键部署；Local：显示本地部署说明 |
+
+### 部署流程（Kubernetes）
+1. 在 **Deploy** tab 编辑配置文件，点击右上角 **Deploy** 按钮
+2. 弹出进度窗口，实时显示两个阶段：
+   - ✓ Apply Kubernetes manifests（`kubectl apply -k`）
+   - ✓ Wait for pod to be ready（轮询 Pod 状态，最长等待 2 分钟）
+3. 完整日志同步显示在底部 **Logs** 面板（自动切换）
+4. 部署成功后点击 **Go to Connect**，自动跳转 Connect tab 并预填 Gateway Token
+
+### Config 编辑器
+根据 `deployType` 自动确定数据来源，无需手动切换：
+
+| 部署类型 | Config 来源 |
+|----------|-------------|
+| `local` | 自动读取 `~/.openclaw/openclaw.json` |
+| `kubernetes` | Kubernetes Pod 选择器（Namespace → Pod → Container → 文件路径） |
+| `docker` | 本地文件路径 |
+
+Form 模式支持：
+- **Agents**：ID、名称、工作区、模型配置
+- **Bindings**：Agent ↔ Channel 绑定关系
+- **Providers**：API 提供商及模型列表
+- **Channels**：21 种 Channel 类型，字段根据类型智能渲染（boolean/select/password/array）
+
+所有删除操作均有二次确认（点击垃圾桶 → 确认 ✓ / 取消 ✗，3 秒后自动取消）。
+
+### 其他
+- **终端**：底部集成 xterm.js 终端，支持拖拽调整高度
+- **Logs 面板**：平时显示 OpenClaw Gateway 实时日志；部署期间自动切换为部署输出
+- **登录鉴权**：JWT Token 保护所有 API 接口
+
+---
 
 ## 技术栈
 
-| 层级 | 技术 |
-|------|------|
-| 前端 | React 18 + TypeScript + Vite + Tailwind CSS |
-| 编辑器 | Monaco Editor (`@monaco-editor/react`) |
-| 终端 | xterm.js + node-pty (PTY) + WebSocket |
-| 后端 | Node.js + Express + TypeScript |
-| YAML 解析 | js-yaml |
+**前端**
+- React 18 + TypeScript
+- Vite + Tailwind CSS
+- Monaco Editor（YAML / JSON 编辑器）
+- xterm.js（终端）
+- lucide-react（图标）
 
-## 项目结构
+**后端**
+- Node.js + Express + TypeScript
+- WebSocket（ws）
+- node-pty（终端 PTY）
+- SSE（Server-Sent Events，部署日志流、安装日志流）
+
+---
+
+## 目录结构
 
 ```
 k8s_openclaw/
-├── templates/              # YAML 模板文件（创建实例时复制）
+├── client/                  # React 前端（Vite）
+│   └── src/
+│       ├── components/
+│       │   ├── CreateInstanceModal.tsx   # 新建/注册实例弹窗（Deploy New / Register Only）
+│       │   ├── InstanceEditor.tsx        # 实例详情（Info / Connect / Config / Deploy）
+│       │   ├── OpenClawPanel.tsx         # Connect 面板（连接管理 + Agents/Channels/Models）
+│       │   ├── OcFileConfigPanel.tsx     # Config 编辑器（Form + Raw JSON）
+│       │   ├── Sidebar.tsx               # 实例列表侧边栏
+│       │   ├── TerminalPanel.tsx         # 底部终端
+│       │   ├── LogsPanel.tsx             # 底部日志面板（Gateway 日志 / 部署日志）
+│       │   ├── LoginPage.tsx             # 登录页
+│       │   └── ...                       # DeploymentForm / ServiceForm / PvcForm 等子组件
+│       ├── types.ts
+│       └── utils/auth.ts
+├── server/                  # Express 后端
+│   └── src/
+│       ├── index.ts                      # 所有 API 路由
+│       └── openclaw-client.ts            # OpenClaw WebSocket 客户端
+├── templates/               # Kubernetes YAML 模板（新建 k8s 实例时复制并替换变量）
 │   ├── deployment.yaml
 │   ├── service.yaml
 │   ├── pvc.yaml
 │   ├── configmap.yaml
+│   ├── secret.yaml          # 含 OPENCLAW_GATEWAY_TOKEN 占位符
 │   └── kustomization.yaml
-├── instances/              # 各实例的 YAML 目录（运行时生成）
+├── instances/               # 运行时目录：每个实例一个子目录
 │   └── <instance-name>/
+│       ├── instance.json    # 元数据（name, deployType, gatewayToken, createdAt）
 │       ├── deployment.yaml
-│       ├── service.yaml
-│       ├── pvc.yaml
-│       ├── configmap.yaml
-│       └── kustomization.yaml
-├── server/                 # Express 后端
-│   └── src/index.ts
-└── client/                 # React 前端
-    └── src/
-        ├── App.tsx
-        └── components/
-            ├── Sidebar.tsx
-            ├── InstanceEditor.tsx
-            ├── YamlFileEditor.tsx
-            ├── DeploymentForm.tsx
-            ├── PvcForm.tsx
-            ├── ServiceForm.tsx
-            ├── ConfigMapForm.tsx
-            ├── TerminalPanel.tsx
-            └── CreateInstanceModal.tsx
+│       └── ...
+└── package.json             # monorepo 根配置
 ```
+
+---
 
 ## 快速开始
 
-### 环境要求
+### 前置依赖
 
 - Node.js >= 18
-- kubectl（已配置好 kubeconfig）
 - npm >= 9
+- kubectl（Kubernetes 部署功能需要）
 
-### 安装依赖
+### 安装
 
 ```bash
+git clone <repo-url>
+cd k8s_openclaw
 npm install
 ```
 
-### 启动开发服务
+### 开发模式
 
 ```bash
 npm run dev
 ```
 
 - 前端：http://localhost:5173
-- 后端 API：http://localhost:3001
+- 后端：http://localhost:3001
 
 ### 生产构建
 
 ```bash
 npm run build
+cd server && npm start
 ```
 
-构建完成后，直接启动后端即可（后端会托管前端静态文件）：
+---
 
-```bash
-node server/dist/index.js
+## 配置说明
+
+### instance.json
+
+每个实例目录下自动生成，记录实例元数据：
+
+```json
+{
+  "name": "my-instance",
+  "deployType": "kubernetes",
+  "createdAt": "2025-01-01T00:00:00.000Z",
+  "gatewayToken": "64位十六进制字符串"
+}
 ```
 
-访问 http://localhost:3001
+### Gateway Token（Kubernetes）
 
-## 使用说明
+- 创建实例时可手动填写或点击刷新自动生成（`crypto.getRandomValues` 生成 64 位 hex）
+- 注入到 `secret.yaml` 的 `OPENCLAW_GATEWAY_TOKEN` 字段
+- Kubernetes 中以 `secretKeyRef` 方式挂载为 Pod 环境变量
+- **注意**：`secret.yaml` 包含明文 Token，请勿提交到版本控制
 
-### 创建实例
+---
 
-1. 点击左侧栏 **New Instance** 按钮
-2. 输入实例名称（仅支持小写字母、数字、短横线，如 `my-openclaw`）
-3. 点击 **Create Instance**，系统自动从模板复制 YAML 并将所有 `openclaw` 引用替换为实例名
+## API 参考
 
-### 编辑配置
-
-选中实例后，顶部 Tab 可切换编辑不同文件：
-
-| Tab | 文件 | 支持表单 |
-|-----|------|---------|
-| Deployment | deployment.yaml | 名称、镜像、副本数、资源限制 |
-| Service | service.yaml | 服务类型、端口 |
-| PVC | pvc.yaml | 存储大小、访问模式 |
-| ConfigMap | configmap.yaml | JSON 配置、AGENTS.md |
-| Kustomization | kustomization.yaml | 仅 YAML 模式 |
-
-每个 Tab 可在 **Form**（表单）和 **YAML**（原始编辑器）之间切换。修改后点击 **Save** 保存到磁盘。
-
-### 部署
-
-点击右上角 **Deploy** 按钮，执行 `kubectl apply -k <instance-dir>`，弹窗实时展示部署输出。
-
-### 终端
-
-页面底部内置完整终端，支持交互式命令（vim、kubectl、bash 脚本等）。启动目录为 `instances/`。点击顶部 **Hide/Show** 可折叠终端面板。
-
-## API 接口
+### 实例
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/instances` | 获取所有实例列表 |
-| POST | `/api/instances` | 创建新实例 |
-| DELETE | `/api/instances/:name` | 删除实例 |
-| GET | `/api/instances/:name/files/:filename` | 读取 YAML 文件内容 |
-| PUT | `/api/instances/:name/files/:filename` | 保存 YAML 文件内容 |
-| POST | `/api/instances/:name/deploy` | 执行部署（流式响应） |
-| GET | `/api/instances/:name/status` | 查询 kubectl 状态 |
-| WS | `/ws/terminal` | WebSocket 终端连接 |
+| `GET` | `/api/instances` | 获取所有实例列表（含 deployType、gatewayToken、createdAt） |
+| `POST` | `/api/instances` | 创建实例；传 `registerOnly: true` 仅创建目录不生成 YAML |
+| `DELETE` | `/api/instances/:name` | 删除实例目录 |
+
+### YAML 文件
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/instances/:name/files/:filename` | 读取 YAML 文件内容 |
+| `PUT` | `/api/instances/:name/files/:filename` | 保存 YAML 文件内容 |
+
+### 部署
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/instances/:name/deploy` | 执行部署（SSE：`log` / `pod_status` / `done`） |
+| `GET` | `/api/instances/:name/deploy-logs` | 获取最近一次部署的完整日志行 |
+| `POST` | `/api/instances/:name/local-install` | 本地安装 openclaw（SSE：`log` / `done`） |
+
+### Config 文件
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/instances/:name/oc-config/source` | 读取当前 Config 来源配置 |
+| `PUT` | `/api/instances/:name/oc-config/source` | 更新 Config 来源配置 |
+| `GET` | `/api/instances/:name/oc-config/pods` | 获取 Kubernetes Pod 列表 |
+| `GET` | `/api/instances/:name/oc-config/file` | 读取 openclaw.json 内容 |
+| `PUT` | `/api/instances/:name/oc-config/file` | 保存 openclaw.json 内容 |
+
+### OpenClaw 连接
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/instances/:name/openclaw/settings` | 读取 Gateway URL 和 Token |
+| `PUT` | `/api/instances/:name/openclaw/settings` | 保存 Gateway URL 和 Token |
+| `POST` | `/api/instances/:name/openclaw/connect` | 连接 Gateway（返回 pairingRequired 时需设备配对） |
+| `POST` | `/api/instances/:name/openclaw/disconnect` | 断开连接 |
+| `GET` | `/api/instances/:name/openclaw/status` | 获取连接状态（disconnected / connecting / connected / error） |
+| `GET` | `/api/instances/:name/openclaw/logs` | 获取 Gateway 日志（最近 300 条） |
+| `GET` | `/api/instances/:name/openclaw/agents` | 获取 Agent 列表 |
+| `GET` | `/api/instances/:name/openclaw/channels` | 获取 Channel 及账号状态 |
+| `GET` | `/api/instances/:name/openclaw/models` | 获取 Model 列表 |
+
+### 终端
+
+| 协议 | 路径 | 说明 |
+|------|------|------|
+| WebSocket | `/terminal` | PTY 终端连接（xterm.js） |
+
+---
+
+## 支持的 Channel 类型（21 种）
+
+`discord` · `slack` · `telegram` · `whatsapp` · `signal` · `imessage` · `msteams` · `googlechat` · `irc` · `matrix` · `mattermost` · `line` · `feishu` · `bluebubbles` · `synology-chat` · `nextcloud-talk` · `twitch` · `tlon` · `nostr` · `zalo` · `zalouser`
