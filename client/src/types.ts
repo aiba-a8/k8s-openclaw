@@ -5,6 +5,7 @@ export interface Instance {
   files: string[];
   deployType?: DeployType;
   gatewayToken?: string;
+  createdAt?: string;
 }
 
 export interface DeployOutput {

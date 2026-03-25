@@ -18,6 +18,7 @@ export default function App() {
   const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(true);
   const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
+  const [deployingInstance, setDeployingInstance] = useState<string | null>(null);
   const [bottomHeight, setBottomHeight] = useState(288); // px, default h-72
   const isDragging = React.useRef(false);
   const dragStartY = React.useRef(0);
@@ -155,6 +156,9 @@ export default function App() {
               instanceName={selectedInstance}
               deployType={instances.find(i => i.name === selectedInstance)?.deployType}
               gatewayToken={instances.find(i => i.name === selectedInstance)?.gatewayToken}
+              createdAt={instances.find(i => i.name === selectedInstance)?.createdAt}
+              onDeployStart={() => { setDeployingInstance(selectedInstance); setBottomTab('logs'); setTerminalOpen(true); }}
+              onDeployEnd={() => setDeployingInstance(null)}
             />
           ) : (
             <div className="flex flex-col items-center justify-center flex-1 text-gray-500">
@@ -220,7 +224,7 @@ export default function App() {
         {terminalOpen && (
           <div className="flex-1 overflow-hidden">
             {bottomTab === 'terminal' && <TerminalPanel />}
-            {bottomTab === 'logs' && <LogsPanel instanceName={selectedInstance} />}
+            {bottomTab === 'logs' && <LogsPanel instanceName={selectedInstance} isDeploying={deployingInstance === selectedInstance} />}
           </div>
         )}
       </div>

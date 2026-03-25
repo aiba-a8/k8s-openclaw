@@ -18,6 +18,17 @@ import {
 const app = express();
 const PORT = 3001;
 
+// ── Per-instance deploy log buffer ───────────────────────────────────────────
+const deployLogs = new Map<string, string[]>();
+const MAX_DEPLOY_LOGS = 500;
+
+function pushDeployLog(name: string, text: string) {
+  let lines = deployLogs.get(name);
+  if (!lines) { lines = []; deployLogs.set(name, lines); }
+  lines.push(...text.split('\n'));
+  if (lines.length > MAX_DEPLOY_LOGS) lines.splice(0, lines.length - MAX_DEPLOY_LOGS);
+}
+
 // ── Per-instance log buffer ───────────────────────────────────────────────────
 
 interface LogEntry {
@@ -138,17 +149,20 @@ app.get('/api/instances', (_req: Request, res: Response) => {
         const metaPath = path.join(INSTANCES_DIR, e.name, 'instance.json');
         let deployType: string | undefined;
         let gatewayToken: string | undefined;
+        let createdAt: string | undefined;
         if (fs.existsSync(metaPath)) {
           try {
-            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { deployType?: string; gatewayToken?: string };
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { deployType?: string; gatewayToken?: string; createdAt?: string };
             deployType = meta.deployType;
             gatewayToken = meta.gatewayToken;
+            createdAt = meta.createdAt;
           } catch { /* ignore */ }
         }
         return {
           name: e.name,
           deployType: deployType ?? 'kubernetes',
           ...(gatewayToken ? { gatewayToken } : {}),
+          ...(createdAt ? { createdAt } : {}),
           files: YAML_FILES.filter(f => fs.existsSync(path.join(INSTANCES_DIR, e.name, f))),
         };
       });
@@ -179,9 +193,10 @@ app.post('/api/instances', (req: Request, res: Response) => {
       : undefined;
 
     // Save metadata
+    const createdAt = new Date().toISOString();
     fs.writeFileSync(
       path.join(instanceDir, 'instance.json'),
-      JSON.stringify({ name, deployType, ...(resolvedToken ? { gatewayToken: resolvedToken } : {}) }, null, 2),
+      JSON.stringify({ name, deployType, createdAt, ...(resolvedToken ? { gatewayToken: resolvedToken } : {}) }, null, 2),
       'utf-8',
     );
 
@@ -282,8 +297,14 @@ app.post('/api/instances/:name/deploy', (req: Request, res: Response) => {
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('X-Accel-Buffering', 'no');
 
+  // Clear previous deploy logs
+  deployLogs.set(name, []);
+
   const send = (type: string, data: Record<string, unknown>) => {
     res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+    if (type === 'log' && typeof data.text === 'string') {
+      pushDeployLog(name, data.text);
+    }
   };
 
   let pollTimer: NodeJS.Timeout | null = null;
@@ -351,6 +372,12 @@ app.post('/api/instances/:name/deploy', (req: Request, res: Response) => {
       });
     }, 3000);
   });
+});
+
+// GET /api/instances/:name/deploy-logs
+app.get('/api/instances/:name/deploy-logs', (req: Request, res: Response) => {
+  const { name } = req.params;
+  return res.json({ lines: deployLogs.get(name) ?? [] });
 });
 
 // POST /api/instances/:name/local-install  – stream installation output

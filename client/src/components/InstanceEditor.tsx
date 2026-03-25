@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode, Wifi } from 'lucide-react';
+import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode, Wifi, Info, Eye, EyeOff, Copy, Check } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import YamlFileEditor from './YamlFileEditor';
 import DeploymentForm from './DeploymentForm';
@@ -9,12 +9,86 @@ import ConfigMapForm from './ConfigMapForm';
 import OpenClawPanel from './OpenClawPanel';
 import { ViewMode, YamlFileName, YAML_FILES } from '../types';
 
-type MainTab = 'files' | 'openclaw';
+type MainTab = 'files' | 'openclaw' | 'info';
 
 interface InstanceEditorProps {
   instanceName: string;
   deployType?: string;
   gatewayToken?: string;
+  createdAt?: string;
+  onDeployStart?: () => void;
+  onDeployEnd?: () => void;
+}
+
+// ── Instance Info Panel ───────────────────────────────────────────────────────
+function InstanceInfoPanel({ name, deployType, gatewayToken, createdAt }: {
+  name: string;
+  deployType?: string;
+  gatewayToken?: string;
+  createdAt?: string;
+}) {
+  const [showToken, setShowToken] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const copyToken = () => {
+    if (!gatewayToken) return;
+    void navigator.clipboard.writeText(gatewayToken);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  const fmtDate = (iso?: string) => {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleString();
+  };
+
+  const rows: Array<{ label: string; value: React.ReactNode }> = [
+    { label: 'Name', value: <span className="font-mono text-gray-100">{name}</span> },
+    {
+      label: 'Deploy Type',
+      value: (
+        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+          deployType === 'local' ? 'bg-green-900/50 text-green-300 border border-green-800' :
+          deployType === 'kubernetes' ? 'bg-blue-900/50 text-blue-300 border border-blue-800' :
+          'bg-gray-700 text-gray-300 border border-gray-600'
+        }`}>{deployType ?? 'kubernetes'}</span>
+      ),
+    },
+    { label: 'Created', value: <span className="text-gray-300">{fmtDate(createdAt)}</span> },
+  ];
+
+  return (
+    <div className="flex-1 overflow-y-auto p-6">
+      <h3 className="text-sm font-semibold text-gray-200 mb-4">Instance Info</h3>
+      <div className="space-y-3 max-w-xl">
+        {rows.map(r => (
+          <div key={r.label} className="flex items-center gap-4 py-2 border-b border-gray-700/50">
+            <span className="text-xs text-gray-500 w-24 flex-shrink-0">{r.label}</span>
+            <div className="text-sm flex-1">{r.value}</div>
+          </div>
+        ))}
+        {gatewayToken && (
+          <div className="flex items-start gap-4 py-2 border-b border-gray-700/50">
+            <span className="text-xs text-gray-500 w-24 flex-shrink-0 mt-1">Gateway Token</span>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5">
+                <code className="flex-1 text-xs font-mono text-green-300 break-all">
+                  {showToken ? gatewayToken : '•'.repeat(Math.min(gatewayToken.length, 32))}
+                </code>
+                <button onClick={() => setShowToken(v => !v)} className="text-gray-500 hover:text-gray-300 flex-shrink-0">
+                  {showToken ? <EyeOff size={13} /> : <Eye size={13} />}
+                </button>
+                <button onClick={copyToken} className="text-gray-500 hover:text-gray-300 flex-shrink-0">
+                  {copied ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
+                </button>
+              </div>
+              <p className="text-xs text-gray-600 mt-1">OPENCLAW_GATEWAY_TOKEN — click eye to reveal</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 const FILE_LABELS: Record<YamlFileName, string> = {
@@ -28,7 +102,7 @@ const FILE_LABELS: Record<YamlFileName, string> = {
 // Files that have form support
 const FORM_SUPPORTED: YamlFileName[] = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml'];
 
-export default function InstanceEditor({ instanceName, deployType, gatewayToken }: InstanceEditorProps) {
+export default function InstanceEditor({ instanceName, deployType, gatewayToken, createdAt, onDeployStart, onDeployEnd }: InstanceEditorProps) {
   const isLocal = deployType === 'local';
   const [mainTab, setMainTab] = useState<MainTab>(isLocal ? 'openclaw' : 'files');
   const [deploySucceeded, setDeploySucceeded] = useState(false);
@@ -121,6 +195,7 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken 
     setDeploySucceeded(false);
     setDeployModalOpen(true);
     setDeploying(true);
+    onDeployStart?.();
 
     try {
       const res = await fetch(`/api/instances/${instanceName}/deploy`, {
@@ -170,6 +245,7 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken 
       setDeployStatus('error');
     } finally {
       setDeploying(false);
+      onDeployEnd?.();
     }
   };
 
@@ -240,6 +316,12 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken 
             >
               <Wifi size={12} />Connect
             </button>
+            <button
+              onClick={() => setMainTab('info')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'info' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              <Info size={12} />Info
+            </button>
           </div>
         </div>
         {!isLocal && (
@@ -256,6 +338,16 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken 
           </button>
         )}
       </div>
+
+      {/* Info Panel */}
+      {mainTab === 'info' && (
+        <InstanceInfoPanel
+          name={instanceName}
+          deployType={deployType}
+          gatewayToken={gatewayToken}
+          createdAt={createdAt}
+        />
+      )}
 
       {/* OpenClaw Connect Panel */}
       {mainTab === 'openclaw' && (
@@ -366,7 +458,7 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken 
       {/* Deploy Output Modal */}
       {deployModalOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-2xl mx-4 flex flex-col max-h-[80vh]">
+          <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-md mx-4 flex flex-col">
             {/* Modal header */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-gray-700 flex-shrink-0">
               <div className="flex items-center gap-2">
@@ -391,44 +483,52 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken 
               </button>
             </div>
 
-            {/* Output */}
-            <div className="flex-1 overflow-y-auto p-4 font-mono text-xs bg-gray-900 rounded-b-lg">
-              {deployOutput.length === 0 && deploying && (
-                <span className="text-gray-500">Waiting for output...</span>
-              )}
-              {deployOutput.map((line, i) => (
-                <div
-                  key={i}
-                  className={`leading-5 ${
-                    line.includes('Error') || line.includes('error') || line.includes('failed') || line.startsWith('✗')
-                      ? 'text-red-400'
-                      : line.startsWith('✓') || line.includes('configured') || line.includes('created') || line.includes('unchanged')
-                      ? 'text-green-400'
-                      : 'text-gray-300'
-                  }`}
-                >
-                  {line || '\u00A0'}
-                </div>
-              ))}
-              {!deploying && (
-                <div className={`mt-2 font-semibold ${
-                  deployStatus === 'success' ? 'text-green-400' : 'text-red-400'
-                }`}>
-                  {deployStatus === 'success' ? '--- Deploy complete ---' : '--- Deploy failed ---'}
-                </div>
-              )}
-            </div>
-
-            {/* Pod status */}
-            {podPhase && (
-              <div className="px-4 py-2 border-t border-gray-700 flex-shrink-0 flex items-center gap-3 bg-gray-850" style={{ background: '#1a1f2e' }}>
-                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${podReady ? 'bg-green-400' : podPhase === 'Running' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-500 animate-pulse'}`} />
-                <span className="text-xs text-gray-400">
-                  Pod: <span className={podReady ? 'text-green-400' : 'text-yellow-300'}>{podPhase}{podName ? ` (${podName})` : ''}</span>
-                  {podReady ? ' · Ready' : ' · Waiting...'}
-                </span>
+            {/* Progress steps */}
+            <div className="px-5 py-4 space-y-3">
+              {/* Step 1: kubectl apply */}
+              <div className="flex items-center gap-3">
+                {deployStatus === 'running' && !podPhase ? (
+                  <Loader2 size={15} className="animate-spin text-blue-400 flex-shrink-0" />
+                ) : deployStatus === 'error' && !podPhase ? (
+                  <AlertCircle size={15} className="text-red-400 flex-shrink-0" />
+                ) : (
+                  <CheckCircle size={15} className="text-green-400 flex-shrink-0" />
+                )}
+                <span className="text-sm text-gray-300">Apply Kubernetes manifests</span>
               </div>
-            )}
+
+              {/* Step 2: Pod status */}
+              <div className="flex items-center gap-3">
+                {!podPhase ? (
+                  <div className="w-4 h-4 rounded-full border-2 border-gray-600 flex-shrink-0" />
+                ) : podReady ? (
+                  <CheckCircle size={15} className="text-green-400 flex-shrink-0" />
+                ) : deployStatus === 'error' ? (
+                  <AlertCircle size={15} className="text-red-400 flex-shrink-0" />
+                ) : (
+                  <Loader2 size={15} className="animate-spin text-blue-400 flex-shrink-0" />
+                )}
+                <div className="flex-1">
+                  <span className="text-sm text-gray-300">Wait for pod to be ready</span>
+                  {podPhase && (
+                    <span className={`ml-2 text-xs ${podReady ? 'text-green-400' : 'text-yellow-400'}`}>
+                      {podPhase}{podName ? ` · ${podName}` : ''}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Error output (only errors, not full log) */}
+              {deployStatus === 'error' && deployOutput.filter(l => l.startsWith('✗') || l.toLowerCase().includes('error') || l.toLowerCase().includes('failed')).length > 0 && (
+                <div className="mt-2 p-3 bg-red-900/20 border border-red-800/50 rounded-lg">
+                  {deployOutput.filter(l => l.startsWith('✗') || l.toLowerCase().includes('error')).map((l, i) => (
+                    <p key={i} className="text-xs text-red-400 font-mono">{l}</p>
+                  ))}
+                </div>
+              )}
+
+              <p className="text-xs text-gray-600 pt-1">Full output is visible in the Logs panel below ↓</p>
+            </div>
 
             {/* Footer */}
             <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-700 flex-shrink-0">
