@@ -4,6 +4,7 @@ export interface Instance {
   name: string;
   files: string[];
   deployType?: DeployType;
+  gatewayToken?: string;
 }
 
 export interface DeployOutput {

@@ -94,11 +94,11 @@ export default function App() {
     setSelectedInstance(null);
   };
 
-  const handleCreateInstance = async (name: string, deployType: string) => {
+  const handleCreateInstance = async (name: string, deployType: string, gatewayToken?: string) => {
     const res = await fetch('/api/instances', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ name, deployType }),
+      body: JSON.stringify({ name, deployType, ...(gatewayToken ? { gatewayToken } : {}) }),
     });
     if (!res.ok) {
       const data = await res.json() as { error: string };
@@ -228,7 +228,7 @@ export default function App() {
       {createModalOpen && (
         <CreateInstanceModal
           onClose={() => setCreateModalOpen(false)}
-          onCreate={(name, deployType) => handleCreateInstance(name, deployType)}
+          onCreate={(name, deployType, gatewayToken) => handleCreateInstance(name, deployType, gatewayToken)}
         />
       )}
     </div>

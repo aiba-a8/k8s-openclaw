@@ -1,14 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   X, Plus, Loader2, AlertCircle, Server, HardDrive,
-  Check, Copy, CheckCircle2, XCircle, Container,
+  Check, Copy, CheckCircle2, XCircle, Container, RefreshCw, Eye, EyeOff,
 } from 'lucide-react';
 import type { DeployType } from '../types';
 import { authHeaders } from '../utils/auth';
 
 interface Props {
   onClose: () => void;
-  onCreate: (name: string, deployType: DeployType) => Promise<void>;
+  onCreate: (name: string, deployType: DeployType, gatewayToken?: string) => Promise<void>;
+}
+
+function generateToken(): string {
+  const arr = new Uint8Array(32);
+  crypto.getRandomValues(arr);
+  return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 // ── Deploy type cards ─────────────────────────────────────────────────────────
@@ -192,6 +198,8 @@ type ModalPhase = 'form' | 'installing' | 'done';
 export default function CreateInstanceModal({ onClose, onCreate }: Props) {
   const [name, setName] = useState('');
   const [deployType, setDeployType] = useState<DeployType | null>(null);
+  const [gatewayToken, setGatewayToken] = useState(() => generateToken());
+  const [showToken, setShowToken] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<ModalPhase>('form');
@@ -209,7 +217,7 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
     setLoading(true);
     setError(null);
     try {
-      await onCreate(name, deployType);
+      await onCreate(name, deployType, deployType === 'kubernetes' ? gatewayToken : undefined);
       if (deployType === 'local') {
         setCreatedName(name);
         setPhase('installing');
@@ -348,6 +356,41 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
 
             {/* Kubernetes info */}
             {deployType === 'kubernetes' && <K8sInfo />}
+
+            {/* Gateway token (kubernetes only) */}
+            {deployType === 'kubernetes' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1.5">Gateway Token</label>
+                <div className="flex items-center gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type={showToken ? 'text' : 'password'}
+                      value={gatewayToken}
+                      onChange={e => setGatewayToken(e.target.value)}
+                      className="w-full px-3 py-2 pr-8 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                      placeholder="64-char hex token"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowToken(v => !v)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200"
+                    >
+                      {showToken ? <EyeOff size={13} /> : <Eye size={13} />}
+                    </button>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGatewayToken(generateToken())}
+                    className="flex items-center gap-1 px-2 py-2 text-xs text-gray-400 hover:text-gray-200 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded transition-colors flex-shrink-0"
+                    title="Auto-generate token"
+                  >
+                    <RefreshCw size={12} />
+                  </button>
+                  <CopyBtn text={gatewayToken} />
+                </div>
+                <p className="mt-1 text-xs text-gray-500">Will be stored in Kubernetes Secret <code className="text-green-300">openclaw-secrets</code></p>
+              </div>
+            )}
 
             {error && (
               <div className="flex items-start gap-2 p-3 bg-red-900/30 border border-red-700/50 rounded text-red-400 text-sm">

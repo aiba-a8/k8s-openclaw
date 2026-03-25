@@ -107,7 +107,7 @@ app.use('/api', authMiddleware);
 // Ensure directories exist
 [INSTANCES_DIR, TEMPLATES_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
 
-const YAML_FILES = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml', 'kustomization.yaml'];
+const YAML_FILES = ['secret.yaml', 'deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml', 'kustomization.yaml'];
 
 function replaceOpenclaw(content: string, instanceName: string): string {
   // Replace all occurrences of "openclaw" with the instance name
@@ -137,12 +137,18 @@ app.get('/api/instances', (_req: Request, res: Response) => {
       .map(e => {
         const metaPath = path.join(INSTANCES_DIR, e.name, 'instance.json');
         let deployType: string | undefined;
+        let gatewayToken: string | undefined;
         if (fs.existsSync(metaPath)) {
-          try { deployType = (JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { deployType?: string }).deployType; } catch { /* ignore */ }
+          try {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { deployType?: string; gatewayToken?: string };
+            deployType = meta.deployType;
+            gatewayToken = meta.gatewayToken;
+          } catch { /* ignore */ }
         }
         return {
           name: e.name,
           deployType: deployType ?? 'kubernetes',
+          ...(gatewayToken ? { gatewayToken } : {}),
           files: YAML_FILES.filter(f => fs.existsSync(path.join(INSTANCES_DIR, e.name, f))),
         };
       });
@@ -154,7 +160,7 @@ app.get('/api/instances', (_req: Request, res: Response) => {
 
 // POST /api/instances
 app.post('/api/instances', (req: Request, res: Response) => {
-  const { name, deployType = 'kubernetes' } = req.body as { name: string; deployType?: string };
+  const { name, deployType = 'kubernetes', gatewayToken } = req.body as { name: string; deployType?: string; gatewayToken?: string };
   if (!name || !/^[a-z0-9-]+$/.test(name)) {
     return res.status(400).json({ error: 'Invalid instance name. Use lowercase letters, numbers, and dashes only.' });
   }
@@ -166,8 +172,18 @@ app.post('/api/instances', (req: Request, res: Response) => {
 
   try {
     fs.mkdirSync(instanceDir, { recursive: true });
+
+    // For kubernetes: require a gateway token (auto-generate if not provided)
+    const resolvedToken = deployType === 'kubernetes'
+      ? (gatewayToken?.trim() || require('crypto').randomBytes(32).toString('hex') as string)
+      : undefined;
+
     // Save metadata
-    fs.writeFileSync(path.join(instanceDir, 'instance.json'), JSON.stringify({ name, deployType }, null, 2), 'utf-8');
+    fs.writeFileSync(
+      path.join(instanceDir, 'instance.json'),
+      JSON.stringify({ name, deployType, ...(resolvedToken ? { gatewayToken: resolvedToken } : {}) }, null, 2),
+      'utf-8',
+    );
 
     const files: string[] = [];
     if (deployType === 'kubernetes') {
@@ -176,13 +192,17 @@ app.post('/api/instances', (req: Request, res: Response) => {
         if (fs.existsSync(templatePath)) {
           let content = fs.readFileSync(templatePath, 'utf-8');
           content = replaceOpenclaw(content, name);
+          // Inject gateway token into secret.yaml
+          if (file === 'secret.yaml' && resolvedToken) {
+            content = content.replace('OPENCLAW_GATEWAY_TOKEN_VALUE', resolvedToken);
+          }
           fs.writeFileSync(path.join(instanceDir, file), content, 'utf-8');
           files.push(file);
         }
       }
     }
 
-    return res.status(201).json({ name, deployType, files });
+    return res.status(201).json({ name, deployType, gatewayToken: resolvedToken, files });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
