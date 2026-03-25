@@ -18,6 +18,35 @@ export default function App() {
   const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(true);
   const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
+  const [bottomHeight, setBottomHeight] = useState(288); // px, default h-72
+  const isDragging = React.useRef(false);
+  const dragStartY = React.useRef(0);
+  const dragStartH = React.useRef(0);
+
+  const onDragStart = (e: React.MouseEvent) => {
+    isDragging.current = true;
+    dragStartY.current = e.clientY;
+    dragStartH.current = bottomHeight;
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+  };
+
+  React.useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = dragStartY.current - e.clientY;
+      setBottomHeight(Math.min(Math.max(dragStartH.current + delta, 80), window.innerHeight - 120));
+    };
+    const onUp = () => {
+      if (!isDragging.current) return;
+      isDragging.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, []);
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -143,7 +172,18 @@ export default function App() {
       </div>
 
       {/* Bottom Panel: Terminal | Logs */}
-      <div className={`flex flex-col border-t border-gray-700 transition-all duration-200 ${terminalOpen ? 'h-72' : 'h-9'}`}>
+      <div
+        className="flex flex-col border-t border-gray-700 flex-shrink-0"
+        style={{ height: terminalOpen ? bottomHeight : 36 }}
+      >
+        {/* Drag handle */}
+        {terminalOpen && (
+          <div
+            onMouseDown={onDragStart}
+            className="h-1 bg-transparent hover:bg-blue-500/40 cursor-ns-resize flex-shrink-0 transition-colors"
+            title="Drag to resize"
+          />
+        )}
         {/* Bottom panel header */}
         <div className="flex items-center bg-gray-800 border-b border-gray-700 flex-shrink-0" style={{ minHeight: '36px' }}>
           {/* Tabs */}

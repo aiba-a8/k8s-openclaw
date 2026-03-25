@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Loader2, AlertCircle, Save, RefreshCw, Server, HardDrive,
-  ChevronDown, Plus, Trash2, CheckCircle2, Bot, Link, Cpu, Radio,
+  ChevronDown, Plus, CheckCircle2, Bot, Link, Cpu, Radio,
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { authHeaders } from '../utils/auth';
+import ConfirmButton from './ConfirmButton';
 
 interface Props { instanceName: string }
 
@@ -32,7 +33,19 @@ interface Pod {
 // ── typed slices of openclaw.json ─────────────────────────────────────────────
 interface AgentEntry { id: string; name?: string; workspace?: string; model?: string }
 interface BindingEntry { agentId: string; match: { channel: string; accountId?: string }; comment?: string }
-interface ProviderEntry { key: string; baseUrl?: string; apiKey?: string }
+interface ModelEntry {
+  id: string;
+  name: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+}
+interface ProviderEntry {
+  key: string;
+  baseUrl?: string;
+  apiKey?: string;
+  models?: ModelEntry[];
+}
 
 function patchJson(raw: string, fn: (cfg: Record<string, unknown>) => void): string {
   const cfg = JSON.parse(raw) as Record<string, unknown>;
@@ -250,7 +263,7 @@ function AgentsForm({ raw, onChange }: { raw: string; onChange: (r: string) => v
         <div key={i} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5"><Bot size={12} className="text-blue-400" />Agent {i + 1}</span>
-            <button onClick={() => update(agents.filter((_, idx) => idx !== i))} className="text-gray-500 hover:text-red-400"><Trash2 size={13} /></button>
+            <ConfirmButton onConfirm={() => update(agents.filter((_, idx) => idx !== i))} label="Delete agent" />
           </div>
           <div className="grid grid-cols-2 gap-2">
             {([['id', 'ID *'], ['name', 'Name'], ['workspace', 'Workspace'], ['model', 'Model']] as [keyof AgentEntry, string][]).map(([f, label]) => (
@@ -304,7 +317,7 @@ function BindingsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
         <div key={i} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
           <div className="flex items-center justify-between">
             <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5"><Link size={12} className="text-purple-400" />Binding {i + 1}</span>
-            <button onClick={() => update(bindings.filter((_, idx) => idx !== i))} className="text-gray-500 hover:text-red-400"><Trash2 size={13} /></button>
+            <ConfirmButton onConfirm={() => update(bindings.filter((_, idx) => idx !== i))} label="Delete binding" />
           </div>
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -367,62 +380,150 @@ function BindingsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
 
 // ── Providers form ────────────────────────────────────────────────────────────
 function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) => void }) {
-  const cfg = JSON.parse(raw) as { models?: { providers?: Record<string, { baseUrl?: string; apiKey?: string }> } };
-  const providers = Object.entries(cfg.models?.providers ?? {}).map(([key, v]) => ({
-    key, baseUrl: v.baseUrl ?? '', apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+  const [expandedProvider, setExpandedProvider] = useState<number | null>(null);
+
+  type RawProvider = { baseUrl?: string; apiKey?: string; models?: ModelEntry[] };
+  const cfg = JSON.parse(raw) as { models?: { providers?: Record<string, RawProvider> } };
+
+  const providers: ProviderEntry[] = Object.entries(cfg.models?.providers ?? {}).map(([key, v]) => ({
+    key,
+    baseUrl: v.baseUrl ?? '',
+    apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+    models: Array.isArray(v.models) ? v.models : [],
   }));
 
-  const update = (next: ProviderEntry[]) => onChange(patchJson(raw, c => {
+  const writeProviders = (next: ProviderEntry[]) => onChange(patchJson(raw, c => {
     if (!c.models) c.models = {};
     const m = c.models as Record<string, unknown>;
-    const existing = (m.providers ?? {}) as Record<string, unknown>;
-    const newProviders: Record<string, unknown> = {};
+    const existing = (m.providers ?? {}) as Record<string, RawProvider>;
+    const result: Record<string, unknown> = {};
     for (const p of next) {
-      newProviders[p.key] = {
-        ...(existing[p.key] as object ?? {}),
+      result[p.key] = {
+        ...(existing[p.key] ?? {}),
         ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
         ...(p.apiKey ? { apiKey: p.apiKey } : {}),
+        models: p.models ?? [],
       };
     }
-    m.providers = newProviders;
+    m.providers = result;
   }));
 
-  const set = (i: number, field: keyof ProviderEntry, val: string) => {
-    const next = providers.map((p, idx) => idx === i ? { ...p, [field]: val } : p);
-    update(next);
+  const setProviderField = (i: number, field: 'key' | 'baseUrl' | 'apiKey', val: string) =>
+    writeProviders(providers.map((p, idx) => idx === i ? { ...p, [field]: val } : p));
+
+  const setModels = (i: number, models: ModelEntry[]) =>
+    writeProviders(providers.map((p, idx) => idx === i ? { ...p, models } : p));
+
+  const setModelField = (pi: number, mi: number, field: keyof ModelEntry, val: string | boolean | number) => {
+    const models = (providers[pi].models ?? []).map((m, idx) =>
+      idx === mi ? { ...m, [field]: val } : m
+    );
+    setModels(pi, models);
   };
+
+  const INPUT = 'w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 font-mono';
 
   return (
     <div className="space-y-2">
       {providers.length === 0 && <p className="text-xs text-gray-500 text-center py-4">No providers configured</p>}
-      {providers.map((p, i) => (
-        <div key={i} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5"><Cpu size={12} className="text-cyan-400" />{p.key || `Provider ${i + 1}`}</span>
-            <button onClick={() => update(providers.filter((_, idx) => idx !== i))} className="text-gray-500 hover:text-red-400"><Trash2 size={13} /></button>
+      {providers.map((p, pi) => {
+        const isOpen = expandedProvider === pi;
+        const models = p.models ?? [];
+        return (
+          <div key={pi} className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+            {/* Provider header */}
+            <div className="flex items-center gap-2 px-3 py-2">
+              <Cpu size={12} className="text-cyan-400 flex-shrink-0" />
+              <span className="text-xs font-semibold text-gray-200 flex-1">{p.key || `Provider ${pi + 1}`}</span>
+              <span className="text-xs text-gray-500">{models.length} model{models.length !== 1 ? 's' : ''}</span>
+              <button
+                onClick={() => setExpandedProvider(isOpen ? null : pi)}
+                className="text-gray-400 hover:text-gray-200 transition-colors ml-1"
+              >
+                <ChevronDown size={13} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+              </button>
+              <ConfirmButton onConfirm={() => writeProviders(providers.filter((_, idx) => idx !== pi))} label="Delete provider" className="text-gray-600 hover:text-red-400" />
+            </div>
+
+            {isOpen && (
+              <div className="border-t border-gray-700 p-3 space-y-3">
+                {/* Provider fields */}
+                <div className="grid grid-cols-1 gap-2">
+                  <div>
+                    <label className="text-[10px] text-gray-500 mb-0.5 block">Provider Key</label>
+                    <input value={p.key} onChange={e => setProviderField(pi, 'key', e.target.value)} className={INPUT} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500 mb-0.5 block">Base URL</label>
+                    <input value={p.baseUrl ?? ''} onChange={e => setProviderField(pi, 'baseUrl', e.target.value)} className={INPUT} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500 mb-0.5 block">API Key</label>
+                    <input type="password" value={p.apiKey ?? ''} onChange={e => setProviderField(pi, 'apiKey', e.target.value)}
+                      placeholder="sk-..." className={INPUT} />
+                  </div>
+                </div>
+
+                {/* Models */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Models</span>
+                    <button
+                      onClick={() => setModels(pi, [...models, { id: '', name: '', contextWindow: 128000, maxTokens: 8096, reasoning: false }])}
+                      className="flex items-center gap-0.5 text-[10px] text-blue-400 hover:text-blue-300"
+                    >
+                      <Plus size={10} />Add Model
+                    </button>
+                  </div>
+
+                  {models.length === 0 && (
+                    <p className="text-[10px] text-gray-600 text-center py-2">No models — click Add Model</p>
+                  )}
+
+                  {models.map((m, mi) => (
+                    <div key={mi} className="bg-gray-900 border border-gray-700 rounded p-2 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] text-gray-400 font-mono">{m.id || `model ${mi + 1}`}</span>
+                        <ConfirmButton onConfirm={() => setModels(pi, models.filter((_, idx) => idx !== mi))} label="Delete model" size={11} className="text-gray-600 hover:text-red-400" />
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        <div>
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">ID *</label>
+                          <input value={m.id} onChange={e => setModelField(pi, mi, 'id', e.target.value)}
+                            placeholder="gpt-4o" className={INPUT} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">Name *</label>
+                          <input value={m.name} onChange={e => setModelField(pi, mi, 'name', e.target.value)}
+                            placeholder="GPT-4o" className={INPUT} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">Context Window</label>
+                          <input type="number" value={m.contextWindow ?? ''} onChange={e => setModelField(pi, mi, 'contextWindow', Number(e.target.value))}
+                            placeholder="128000" className={INPUT} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">Max Tokens</label>
+                          <input type="number" value={m.maxTokens ?? ''} onChange={e => setModelField(pi, mi, 'maxTokens', Number(e.target.value))}
+                            placeholder="8096" className={INPUT} />
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input type="checkbox" checked={m.reasoning ?? false}
+                          onChange={e => setModelField(pi, mi, 'reasoning', e.target.checked)}
+                          className="accent-purple-500" />
+                        <span className="text-[10px] text-gray-400">Reasoning model</span>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          <div className="grid grid-cols-1 gap-2">
-            <div>
-              <label className="text-[10px] text-gray-500 mb-0.5 block">Provider Key</label>
-              <input value={p.key} onChange={e => set(i, 'key', e.target.value)}
-                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 font-mono" />
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 mb-0.5 block">Base URL</label>
-              <input value={p.baseUrl} onChange={e => set(i, 'baseUrl', e.target.value)}
-                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 font-mono" />
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 mb-0.5 block">API Key</label>
-              <input type="password" value={p.apiKey} onChange={e => set(i, 'apiKey', e.target.value)}
-                placeholder="sk-..."
-                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono" />
-            </div>
-          </div>
-        </div>
-      ))}
+        );
+      })}
       <button
-        onClick={() => update([...providers, { key: 'anthropic', baseUrl: '', apiKey: '' }])}
+        onClick={() => { writeProviders([...providers, { key: 'anthropic', baseUrl: '', apiKey: '', models: [] }]); setExpandedProvider(providers.length); }}
         className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-1"
       >
         <Plus size={12} />Add Provider
@@ -431,22 +532,349 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
   );
 }
 
-// ── Channels overview ─────────────────────────────────────────────────────────
-function ChannelsOverview({ raw }: { raw: string }) {
+// ── Channel config field metadata ─────────────────────────────────────────────
+const KNOWN_CHANNELS = ['discord', 'slack', 'telegram', 'whatsapp', 'signal', 'imessage', 'msteams', 'googlechat', 'irc'];
+
+type FieldMeta =
+  | { type: 'boolean'; label: string }
+  | { type: 'password'; label: string }
+  | { type: 'string'; label: string }
+  | { type: 'select'; label: string; options: string[] }
+  | { type: 'array'; label: string };
+
+const POLICY_OPTIONS = ['open', 'allowlist', 'deny'];
+const STREAMING_OPTIONS = ['none', 'partial', 'full'];
+
+const CHANNEL_FIELD_META: Record<string, FieldMeta> = {
+  enabled:      { type: 'boolean', label: 'Enabled' },
+  dmPolicy:     { type: 'select',  label: 'DM Policy',    options: POLICY_OPTIONS },
+  groupPolicy:  { type: 'select',  label: 'Group Policy', options: POLICY_OPTIONS },
+  streaming:    { type: 'select',  label: 'Streaming',    options: STREAMING_OPTIONS },
+  botToken:     { type: 'password', label: 'Bot Token' },
+  apiKey:       { type: 'password', label: 'API Key' },
+  token:        { type: 'password', label: 'Token' },
+  secret:       { type: 'password', label: 'Secret' },
+  clientSecret: { type: 'password', label: 'Client Secret' },
+  webhookSecret:{ type: 'password', label: 'Webhook Secret' },
+  allowFrom:    { type: 'array',   label: 'Allow From' },
+  denyFrom:     { type: 'array',   label: 'Deny From' },
+  allowGroups:  { type: 'array',   label: 'Allow Groups' },
+};
+
+// Input class shared across field editors
+const INPUT_CLS = 'w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 font-mono';
+
+function ChannelFieldEditor({
+  fieldKey, value, onChange,
+}: {
+  fieldKey: string;
+  value: unknown;
+  onChange: (v: unknown) => void;
+}) {
+  const [showPw, setShowPw] = useState(false);
+  const [newItem, setNewItem] = useState('');
+
+  const meta: FieldMeta = CHANNEL_FIELD_META[fieldKey] ?? (
+    typeof value === 'boolean' ? { type: 'boolean', label: fieldKey } :
+    Array.isArray(value)       ? { type: 'array',   label: fieldKey } :
+                                 { type: 'string',  label: fieldKey }
+  );
+  const label = meta.label !== fieldKey ? meta.label : fieldKey;
+
+  if (meta.type === 'boolean') {
+    return (
+      <label className="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" checked={Boolean(value)} onChange={e => onChange(e.target.checked)} className="accent-purple-500" />
+        <span className="text-xs text-gray-300">{label}</span>
+      </label>
+    );
+  }
+
+  if (meta.type === 'select') {
+    return (
+      <div>
+        <label className="text-[10px] text-gray-500 mb-0.5 block">{label}</label>
+        <div className="relative">
+          <select
+            value={String(value ?? '')}
+            onChange={e => onChange(e.target.value)}
+            className="w-full appearance-none bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 pr-5"
+          >
+            {meta.options.map(o => <option key={o} value={o}>{o}</option>)}
+          </select>
+          <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+        </div>
+      </div>
+    );
+  }
+
+  if (meta.type === 'password') {
+    return (
+      <div>
+        <label className="text-[10px] text-gray-500 mb-0.5 block">{label}</label>
+        <div className="relative">
+          <input
+            type={showPw ? 'text' : 'password'}
+            value={String(value ?? '')}
+            onChange={e => onChange(e.target.value)}
+            className={`${INPUT_CLS} pr-12`}
+          />
+          <button
+            type="button"
+            onClick={() => setShowPw(p => !p)}
+            className="absolute right-1.5 top-1/2 -translate-y-1/2 text-[10px] text-gray-500 hover:text-gray-300"
+          >{showPw ? 'hide' : 'show'}</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (meta.type === 'array') {
+    const arr = Array.isArray(value) ? (value as string[]) : [];
+    const addItem = () => {
+      const v = newItem.trim();
+      if (!v) return;
+      onChange([...arr, v]);
+      setNewItem('');
+    };
+    return (
+      <div>
+        <label className="text-[10px] text-gray-500 mb-1 block">{label}</label>
+        <div className="space-y-1">
+          {arr.map((item, i) => (
+            <div key={i} className="flex items-center gap-1">
+              <input
+                value={item}
+                onChange={e => { const next = [...arr]; next[i] = e.target.value; onChange(next); }}
+                className={`${INPUT_CLS} flex-1`}
+              />
+              <button onClick={() => onChange(arr.filter((_, idx) => idx !== i))} className="text-gray-600 hover:text-red-400 flex-shrink-0">
+                <Plus size={11} className="rotate-45" />
+              </button>
+            </div>
+          ))}
+          <div className="flex items-center gap-1">
+            <input
+              value={newItem}
+              onChange={e => setNewItem(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addItem()}
+              placeholder="add item…"
+              className={`${INPUT_CLS} flex-1 placeholder-gray-600`}
+            />
+            <button onClick={addItem} className="text-blue-400 hover:text-blue-300 flex-shrink-0"><Plus size={11} /></button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // string / fallback
+  return (
+    <div>
+      <label className="text-[10px] text-gray-500 mb-0.5 block">{label}</label>
+      <input value={String(value ?? '')} onChange={e => onChange(e.target.value)} className={INPUT_CLS} />
+    </div>
+  );
+}
+
+// ── Per-channel card ───────────────────────────────────────────────────────────
+function ChannelCard({
+  channelKey, value, onUpdate, onRename, onDelete,
+}: {
+  channelKey: string;
+  value: Record<string, unknown>;
+  onUpdate: (v: Record<string, unknown>) => void;
+  onRename: (oldKey: string, newKey: string) => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [renameVal, setRenameVal] = useState<string | null>(null);
+  const [newFieldKey, setNewFieldKey] = useState('');
+
+  const setField = (k: string, v: unknown) => onUpdate({ ...value, [k]: v });
+  const removeField = (k: string) => { const n = { ...value }; delete n[k]; onUpdate(n); };
+
+  const commitRename = () => {
+    const nk = (renameVal ?? '').trim();
+    if (nk && nk !== channelKey) onRename(channelKey, nk);
+    setRenameVal(null);
+  };
+
+  const addField = () => {
+    const k = newFieldKey.trim();
+    if (!k || k in value) return;
+    onUpdate({ ...value, [k]: '' });
+    setNewFieldKey('');
+  };
+
+  const fieldKeys = Object.keys(value);
+  // Booleans first, then rest
+  const boolKeys = fieldKeys.filter(k => typeof value[k] === 'boolean');
+  const otherKeys = fieldKeys.filter(k => typeof value[k] !== 'boolean');
+
+  return (
+    <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-2 px-3 py-2">
+        <Radio size={12} className="text-purple-400 flex-shrink-0" />
+        {renameVal !== null ? (
+          <input
+            autoFocus
+            value={renameVal}
+            onChange={e => setRenameVal(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenameVal(null); }}
+            className="flex-1 bg-gray-900 border border-blue-500 rounded px-2 py-0.5 text-xs text-gray-100 font-mono focus:outline-none"
+          />
+        ) : (
+          <button
+            onClick={() => setRenameVal(channelKey)}
+            className="flex-1 text-left text-xs text-gray-200 font-mono capitalize hover:text-blue-300"
+            title="Click to rename"
+          >
+            {channelKey}
+          </button>
+        )}
+        <span className="text-[10px] text-gray-600">{fieldKeys.length} field{fieldKeys.length !== 1 ? 's' : ''}</span>
+        <button onClick={() => setOpen(o => !o)} className="text-gray-400 hover:text-gray-200">
+          <ChevronDown size={13} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        <ConfirmButton onConfirm={onDelete} label={`Delete ${channelKey} channel`} />
+      </div>
+
+      {open && (
+        <div className="border-t border-gray-700 p-3 space-y-3">
+          {/* Boolean fields inline row */}
+          {boolKeys.length > 0 && (
+            <div className="flex flex-wrap gap-4">
+              {boolKeys.map(k => (
+                <div key={k} className="flex items-center gap-1">
+                  <ChannelFieldEditor fieldKey={k} value={value[k]} onChange={v => setField(k, v)} />
+                  <button onClick={() => removeField(k)} className="text-gray-700 hover:text-red-400 ml-1"><Plus size={10} className="rotate-45" /></button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Other fields grid */}
+          <div className="grid grid-cols-2 gap-2">
+            {otherKeys.map(k => (
+              <div key={k} className="flex items-start gap-1">
+                <div className="flex-1 min-w-0">
+                  <ChannelFieldEditor fieldKey={k} value={value[k]} onChange={v => setField(k, v)} />
+                </div>
+                <button onClick={() => removeField(k)} className="text-gray-700 hover:text-red-400 mt-4 flex-shrink-0"><Plus size={10} className="rotate-45" /></button>
+              </div>
+            ))}
+          </div>
+
+          {/* Add field */}
+          <div className="flex items-center gap-1 border-t border-gray-700 pt-2">
+            <input
+              value={newFieldKey}
+              onChange={e => setNewFieldKey(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && addField()}
+              placeholder="add field…"
+              className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+            />
+            <button onClick={addField} disabled={!newFieldKey.trim()} className="flex items-center gap-0.5 text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40 whitespace-nowrap">
+              <Plus size={11} />Add field
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Channels form ─────────────────────────────────────────────────────────────
+function ChannelsForm({ raw, onChange }: { raw: string; onChange: (r: string) => void }) {
+  const [newName, setNewName] = useState('');
+  const [customNew, setCustomNew] = useState(false);
+
   const cfg = JSON.parse(raw) as { channels?: Record<string, unknown> };
-  const chKeys = Object.keys(cfg.channels ?? {});
+  const channels = cfg.channels ?? {};
+  const keys = Object.keys(channels);
+
+  const writeChannels = (next: Record<string, unknown>) =>
+    onChange(patchJson(raw, c => { c.channels = next; }));
+
+  const addChannel = () => {
+    const name = newName.trim();
+    if (!name || keys.includes(name)) return;
+    writeChannels({ ...channels, [name]: { enabled: true } });
+    setNewName('');
+    setCustomNew(false);
+  };
+
+  const deleteChannel = (key: string) => {
+    const next = { ...channels };
+    delete next[key];
+    writeChannels(next);
+  };
+
+  const updateChannel = (key: string, val: Record<string, unknown>) =>
+    writeChannels({ ...channels, [key]: val });
+
+  const renameChannel = (oldKey: string, newKey: string) => {
+    if (!newKey || newKey === oldKey || keys.includes(newKey)) return;
+    const next: Record<string, unknown> = {};
+    for (const k of keys) next[k === oldKey ? newKey : k] = channels[k];
+    writeChannels(next);
+  };
+
+  const unusedKnown = KNOWN_CHANNELS.filter(c => !keys.includes(c));
+
   return (
     <div className="space-y-2">
-      {chKeys.length === 0 && <p className="text-xs text-gray-500 text-center py-4">No channels configured. Edit in Raw mode.</p>}
-      <div className="flex flex-wrap gap-2">
-        {chKeys.map(ch => (
-          <div key={ch} className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg">
-            <Radio size={12} className="text-purple-400" />
-            <span className="text-xs text-gray-200 capitalize">{ch}</span>
-          </div>
-        ))}
+      {keys.length === 0 && <p className="text-xs text-gray-500 text-center py-4">No channels configured</p>}
+
+      {keys.map(key => (
+        <ChannelCard
+          key={key}
+          channelKey={key}
+          value={(channels[key] as Record<string, unknown>) ?? {}}
+          onUpdate={val => updateChannel(key, val)}
+          onRename={renameChannel}
+          onDelete={() => deleteChannel(key)}
+        />
+      ))}
+
+      {/* Add channel */}
+      <div className="flex items-center gap-2 mt-2">
+        {!customNew && unusedKnown.length > 0 ? (
+          <>
+            <div className="relative flex-1">
+              <select
+                value={newName}
+                onChange={e => setNewName(e.target.value)}
+                className="w-full appearance-none bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 pr-5"
+              >
+                <option value="">Select channel…</option>
+                {unusedKnown.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+            </div>
+            <button onClick={() => setCustomNew(true)} className="text-[10px] text-gray-500 hover:text-gray-300 whitespace-nowrap">custom</button>
+          </>
+        ) : (
+          <input
+            autoFocus={customNew}
+            value={newName}
+            onChange={e => setNewName(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && addChannel()}
+            placeholder="channel name"
+            className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+          />
+        )}
+        <button
+          onClick={addChannel}
+          disabled={!newName.trim() || keys.includes(newName.trim())}
+          className="flex items-center gap-0.5 text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+        >
+          <Plus size={12} />Add
+        </button>
       </div>
-      <p className="text-xs text-gray-600 mt-3">Channel account details are complex — use Raw mode to edit.</p>
     </div>
   );
 }
@@ -586,7 +1014,7 @@ export default function OcFileConfigPanel({ instanceName }: Props) {
                 {formTab === 'agents' && <AgentsForm raw={raw} onChange={setRaw} />}
                 {formTab === 'bindings' && <BindingsForm raw={raw} onChange={setRaw} />}
                 {formTab === 'providers' && <ProvidersForm raw={raw} onChange={setRaw} />}
-                {formTab === 'channels' && <ChannelsOverview raw={raw} />}
+                {formTab === 'channels' && <ChannelsForm raw={raw} onChange={setRaw} />}
               </>
             )}
           </div>
