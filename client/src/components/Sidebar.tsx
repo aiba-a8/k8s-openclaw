@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Trash2, Server, Loader2, AlertCircle } from 'lucide-react';
+import { Plus, Trash2, Server, Loader2, AlertCircle, LogOut } from 'lucide-react';
 import { Instance } from '../types';
 
 interface SidebarProps {
@@ -8,6 +8,7 @@ interface SidebarProps {
   onSelectInstance: (name: string) => void;
   onDeleteInstance: (name: string) => Promise<void>;
   onNewInstance: () => void;
+  onLogout: () => void;
   loading: boolean;
   error: string | null;
 }
@@ -18,6 +19,7 @@ export default function Sidebar({
   onSelectInstance,
   onDeleteInstance,
   onNewInstance,
+  onLogout,
   loading,
   error,
 }: SidebarProps) {
@@ -42,9 +44,18 @@ export default function Sidebar({
   return (
     <div className="flex flex-col w-64 flex-shrink-0 bg-gray-800 border-r border-gray-700">
       {/* Header */}
-      <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-700">
-        <Server size={18} className="text-blue-400" />
-        <h1 className="text-sm font-bold text-gray-100">K8s OpenClaw</h1>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+        <div className="flex items-center gap-2">
+          <Server size={18} className="text-blue-400" />
+          <h1 className="text-sm font-bold text-gray-100">K8s OpenClaw</h1>
+        </div>
+        <button
+          onClick={onLogout}
+          title="退出登录"
+          className="p-1 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700 transition-colors"
+        >
+          <LogOut size={14} />
+        </button>
       </div>
 
       {/* New Instance button */}

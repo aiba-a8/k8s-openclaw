@@ -4,9 +4,13 @@ import Sidebar from './components/Sidebar';
 import InstanceEditor from './components/InstanceEditor';
 import TerminalPanel from './components/TerminalPanel';
 import CreateInstanceModal from './components/CreateInstanceModal';
+import LoginPage from './components/LoginPage';
 import { Instance } from './types';
+import { getToken, clearToken, authHeaders, verifyToken } from './utils/auth';
 
 export default function App() {
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(true);
@@ -14,9 +18,24 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Check saved token on mount
+  useEffect(() => {
+    const token = getToken();
+    if (!token) {
+      setAuthChecking(false);
+      return;
+    }
+    verifyToken(token).then((ok) => {
+      setAuthenticated(ok);
+      if (!ok) clearToken();
+      setAuthChecking(false);
+    });
+  }, []);
+
   const fetchInstances = useCallback(async () => {
     try {
-      const res = await fetch('/api/instances');
+      const res = await fetch('/api/instances', { headers: authHeaders() });
+      if (res.status === 401) { setAuthenticated(false); clearToken(); return; }
       if (!res.ok) throw new Error('Failed to fetch instances');
       const data = await res.json() as Instance[];
       setInstances(data);
@@ -28,13 +47,24 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    void fetchInstances();
-  }, [fetchInstances]);
+    if (authenticated) void fetchInstances();
+  }, [authenticated, fetchInstances]);
+
+  const handleLogin = () => {
+    setAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+    clearToken();
+    setAuthenticated(false);
+    setInstances([]);
+    setSelectedInstance(null);
+  };
 
   const handleCreateInstance = async (name: string) => {
     const res = await fetch('/api/instances', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeaders() },
       body: JSON.stringify({ name }),
     });
     if (!res.ok) {
@@ -47,16 +77,26 @@ export default function App() {
   };
 
   const handleDeleteInstance = async (name: string) => {
-    const res = await fetch(`/api/instances/${name}`, { method: 'DELETE' });
+    const res = await fetch(`/api/instances/${name}`, {
+      method: 'DELETE',
+      headers: authHeaders(),
+    });
     if (!res.ok) {
       const data = await res.json() as { error: string };
       throw new Error(data.error);
     }
     await fetchInstances();
-    if (selectedInstance === name) {
-      setSelectedInstance(null);
-    }
+    if (selectedInstance === name) setSelectedInstance(null);
   };
+
+  // Show nothing while checking saved token
+  if (authChecking) {
+    return <div className="min-h-screen bg-gray-900" />;
+  }
+
+  if (!authenticated) {
+    return <LoginPage onLogin={handleLogin} />;
+  }
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100 overflow-hidden">
@@ -69,6 +109,7 @@ export default function App() {
           onSelectInstance={setSelectedInstance}
           onDeleteInstance={handleDeleteInstance}
           onNewInstance={() => setCreateModalOpen(true)}
+          onLogout={handleLogout}
           loading={loading}
           error={error}
         />
@@ -99,7 +140,6 @@ export default function App() {
 
       {/* Terminal Panel */}
       <div className={`flex flex-col border-t border-gray-700 transition-all duration-200 ${terminalOpen ? 'h-72' : 'h-9'}`}>
-        {/* Terminal toolbar */}
         <div className="flex items-center justify-between px-3 py-1 bg-gray-800 border-b border-gray-700 flex-shrink-0">
           <div className="flex items-center gap-2">
             <Terminal size={14} className="text-gray-400" />

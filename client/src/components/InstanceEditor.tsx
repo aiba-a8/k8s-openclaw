@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode } from 'lucide-react';
+import { authHeaders } from '../utils/auth';
 import YamlFileEditor from './YamlFileEditor';
 import DeploymentForm from './DeploymentForm';
 import PvcForm from './PvcForm';
@@ -44,7 +45,7 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
     try {
       await Promise.all(
         YAML_FILES.map(async (file) => {
-          const res = await fetch(`/api/instances/${instanceName}/files/${file}`);
+          const res = await fetch(`/api/instances/${instanceName}/files/${file}`, { headers: authHeaders() });
           if (res.ok) {
             const data = await res.json() as { content: string };
             contents[file] = data.content;
@@ -81,7 +82,7 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
     try {
       const res = await fetch(`/api/instances/${instanceName}/files/${selectedFile}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
         body: JSON.stringify({ content }),
       });
 
@@ -109,6 +110,7 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
     try {
       const res = await fetch(`/api/instances/${instanceName}/deploy`, {
         method: 'POST',
+        headers: authHeaders(),
       });
 
       if (!res.ok || !res.body) {

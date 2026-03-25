@@ -44,12 +44,61 @@ const http = __importStar(require("http"));
 const ws_1 = require("ws");
 const pty = __importStar(require("@homebridge/node-pty-prebuilt-multiarch"));
 const child_process_1 = require("child_process");
+const crypto_1 = require("crypto");
+const url = __importStar(require("url"));
 const app = (0, express_1.default)();
 const PORT = 3001;
 app.use((0, cors_1.default)());
 app.use(express_1.default.json({ limit: '10mb' }));
 const INSTANCES_DIR = path.join(__dirname, '../../instances');
 const TEMPLATES_DIR = path.join(__dirname, '../../templates');
+const CONFIG_FILE = path.join(__dirname, '../../config.json');
+function loadOrCreateConfig() {
+    // Env var takes priority
+    if (process.env.AUTH_TOKEN) {
+        return { authToken: process.env.AUTH_TOKEN };
+    }
+    if (fs.existsSync(CONFIG_FILE)) {
+        try {
+            const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+            const cfg = JSON.parse(raw);
+            if (cfg.authToken)
+                return cfg;
+        }
+        catch {
+            // fall through to generate
+        }
+    }
+    // First run: generate a random token and persist it
+    const cfg = { authToken: (0, crypto_1.randomUUID)() };
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2), 'utf-8');
+    return cfg;
+}
+const config = loadOrCreateConfig();
+const AUTH_TOKEN = config.authToken;
+console.log(`\n🔑 Auth token: ${AUTH_TOKEN}\n   (set AUTH_TOKEN env var or edit config.json to change)\n`);
+// ── Auth middleware ───────────────────────────────────────────────────────────
+function authMiddleware(req, res, next) {
+    const header = req.headers['authorization'] ?? '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : header;
+    if (token === AUTH_TOKEN) {
+        next();
+        return;
+    }
+    res.status(401).json({ error: 'Unauthorized' });
+}
+// Public: verify endpoint (client uses this to test a token before storing)
+app.post('/api/auth/verify', (req, res) => {
+    const { token } = req.body;
+    if (token === AUTH_TOKEN) {
+        res.json({ ok: true });
+    }
+    else {
+        res.status(401).json({ ok: false, error: 'Invalid token' });
+    }
+});
+// All other /api routes require auth
+app.use('/api', authMiddleware);
 // Ensure directories exist
 [INSTANCES_DIR, TEMPLATES_DIR].forEach(d => fs.mkdirSync(d, { recursive: true }));
 const YAML_FILES = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml', 'kustomization.yaml'];
@@ -232,7 +281,15 @@ if (fs.existsSync(clientDist)) {
 // HTTP server + WebSocket
 const server = http.createServer(app);
 const wss = new ws_1.WebSocketServer({ server, path: '/ws/terminal' });
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+    // Verify token from query string: /ws/terminal?token=xxx
+    const parsed = url.parse(req.url ?? '', true);
+    const wsToken = parsed.query['token'];
+    if (wsToken !== AUTH_TOKEN) {
+        ws.send('\r\n\x1b[31m[Unauthorized: invalid token]\x1b[0m\r\n');
+        ws.close(4001, 'Unauthorized');
+        return;
+    }
     const shell = process.platform === 'win32' ? 'powershell.exe' : 'bash';
     let ptyProcess;
     try {
