@@ -1,6 +1,9 @@
+export type DeployType = 'kubernetes' | 'local' | 'docker';
+
 export interface Instance {
   name: string;
   files: string[];
+  deployType?: DeployType;
 }
 
 export interface DeployOutput {

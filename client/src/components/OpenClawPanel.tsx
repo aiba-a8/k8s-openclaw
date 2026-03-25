@@ -9,6 +9,7 @@ import OcFileConfigPanel from './OcFileConfigPanel';
 
 interface Props {
   instanceName: string;
+  deployType?: string;
 }
 
 type ConnStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -429,12 +430,12 @@ function PairingGuide({ info, onRetry, onDismiss }: { info: PairingInfo; onRetry
 }
 
 // ── Main Panel ─────────────────────────────────────────────────────────────────
-export default function OpenClawPanel({ instanceName }: Props) {
+export default function OpenClawPanel({ instanceName, deployType }: Props) {
   const [status, setStatus] = useState<ConnStatus>('disconnected');
   const [connError, setConnError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [subTab, setSubTab] = useState<SubTab>('agents');
+  const [subTab, setSubTab] = useState<SubTab>('config');
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const pollRef = useRef<NodeJS.Timeout>();
 
@@ -547,8 +548,8 @@ export default function OpenClawPanel({ instanceName }: Props) {
         </div>
       )}
 
-      {/* Tabs — Config is always available; Agents/Channels/Models require connection */}
-      {!showSettings && (subTab === 'config' || isConnected) && (
+      {/* Tabs — Config always available; Agents/Channels/Models require connection */}
+      {!showSettings && (
         <>
           <div className="flex border-b border-gray-700 bg-gray-800/50 flex-shrink-0">
             {ALL_TABS.filter(t => !t.requiresConnection || isConnected).map(t => (
@@ -564,56 +565,39 @@ export default function OpenClawPanel({ instanceName }: Props) {
                 {t.icon}{t.label}
               </button>
             ))}
-            {/* Config tab always visible */}
-            {!isConnected && (
-              <button
-                onClick={() => setSubTab('config')}
-                className={`flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors ${
-                  subTab === 'config'
-                    ? 'text-blue-400 border-blue-400'
-                    : 'text-gray-400 hover:text-gray-200 border-transparent'
-                }`}
-              >
-                <FileJson size={13} />Config
-              </button>
-            )}
           </div>
           <div className="flex-1 overflow-hidden">
-            {subTab === 'agents' && <AgentsView instanceName={instanceName} />}
-            {subTab === 'channels' && <ChannelsView instanceName={instanceName} />}
-            {subTab === 'models' && <ModelsView instanceName={instanceName} />}
-            {subTab === 'config' && <OcFileConfigPanel instanceName={instanceName} />}
+            {subTab === 'config' && <OcFileConfigPanel instanceName={instanceName} deployType={deployType} />}
+            {subTab !== 'config' && !isConnected && !pairingInfo && (
+              <div className="flex flex-col items-center justify-center h-full text-gray-600 gap-3">
+                {status === 'error' ? <XCircle size={32} className="text-red-500/40" /> : <WifiOff size={32} className="opacity-30" />}
+                <div className="text-sm text-center">
+                  {status === 'error' ? (
+                    <><p className="text-red-400 text-xs mb-1">{connError}</p><p>Configure settings and try again</p></>
+                  ) : (
+                    <><p>Not connected to OpenClaw gateway</p><p className="text-xs mt-1">Configure the gateway URL and token, then click Connect</p></>
+                  )}
+                </div>
+                <button
+                  onClick={() => setShowSettings(true)}
+                  className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg transition-colors"
+                >
+                  <Settings2 size={12} />Configure
+                </button>
+              </div>
+            )}
+            {subTab !== 'config' && !isConnected && pairingInfo && (
+              <PairingGuide
+                info={pairingInfo}
+                onRetry={() => void handleConnect()}
+                onDismiss={() => { setPairingInfo(null); setConnError(null); setStatus('disconnected'); }}
+              />
+            )}
+            {subTab === 'agents' && isConnected && <AgentsView instanceName={instanceName} />}
+            {subTab === 'channels' && isConnected && <ChannelsView instanceName={instanceName} />}
+            {subTab === 'models' && isConnected && <ModelsView instanceName={instanceName} />}
           </div>
         </>
-      )}
-
-      {/* Pairing guide */}
-      {!isConnected && !showSettings && subTab !== 'config' && pairingInfo && (
-        <PairingGuide
-          info={pairingInfo}
-          onRetry={() => void handleConnect()}
-          onDismiss={() => { setPairingInfo(null); setConnError(null); setStatus('disconnected'); }}
-        />
-      )}
-
-      {/* Not connected placeholder */}
-      {!isConnected && !showSettings && subTab !== 'config' && !pairingInfo && (
-        <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-3">
-          {status === 'error' ? <XCircle size={32} className="text-red-500/40" /> : <WifiOff size={32} className="opacity-30" />}
-          <div className="text-sm text-center">
-            {status === 'error' ? (
-              <><p className="text-red-400 text-xs mb-1">{connError}</p><p>Configure settings and try again</p></>
-            ) : (
-              <><p>Not connected to OpenClaw gateway</p><p className="text-xs mt-1">Configure the gateway URL and token, then click Connect</p></>
-            )}
-          </div>
-          <button
-            onClick={() => setShowSettings(true)}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg transition-colors"
-          >
-            <Settings2 size={12} />Configure
-          </button>
-        </div>
       )}
     </div>
   );

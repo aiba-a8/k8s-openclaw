@@ -7,7 +7,7 @@ import Editor from '@monaco-editor/react';
 import { authHeaders } from '../utils/auth';
 import ConfirmButton from './ConfirmButton';
 
-interface Props { instanceName: string }
+interface Props { instanceName: string; deployType?: string }
 
 type SourceType = 'kubernetes' | 'local';
 type ViewMode = 'form' | 'raw';
@@ -890,7 +890,8 @@ function ChannelsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
 }
 
 // ── Main Config Panel ─────────────────────────────────────────────────────────
-export default function OcFileConfigPanel({ instanceName }: Props) {
+export default function OcFileConfigPanel({ instanceName, deployType }: Props) {
+  const isLocalDeploy = deployType === 'local';
   const [raw, setRaw] = useState<string | null>(null);
   const [filePath, setFilePath] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('form');
@@ -909,6 +910,36 @@ export default function OcFileConfigPanel({ instanceName }: Props) {
     setParseError(null);
     try { JSON.parse(content); setParseError(null); } catch (e) { setParseError(String(e)); }
   }, []);
+
+  const [localLoading, setLocalLoading] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  const loadLocalFile = useCallback(async () => {
+    const localPath = '~/.openclaw/openclaw.json';
+    setLocalLoading(true);
+    setLocalError(null);
+    try {
+      await fetch(`/api/instances/${instanceName}/oc-config/source`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ type: 'local', localPath }),
+      });
+      const r = await fetch(`/api/instances/${instanceName}/oc-config/file`, { headers: authHeaders() });
+      const d = await r.json() as { content?: string; path?: string; error?: string };
+      if (!r.ok) throw new Error(d.error ?? 'Failed to load');
+      if (d.content) handleLoad(d.content, d.path ?? localPath);
+    } catch (e) {
+      setLocalError(String(e));
+    } finally {
+      setLocalLoading(false);
+    }
+  }, [instanceName, handleLoad]);
+
+  // Auto-load on mount for local deploy
+  useEffect(() => {
+    if (isLocalDeploy) void loadLocalFile();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instanceName, isLocalDeploy]);
 
   const handleRawChange = (val: string) => {
     setRaw(val);
@@ -941,7 +972,29 @@ export default function OcFileConfigPanel({ instanceName }: Props) {
     { id: 'channels', label: 'Channels', icon: <Radio size={12} /> },
   ];
 
-  // If no file loaded yet
+  // Local deploy: loading/error state instead of SourcePanel
+  if (isLocalDeploy && !raw) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-sm text-gray-500">
+        {localLoading ? (
+          <><Loader2 size={20} className="animate-spin text-blue-400" /><span className="text-xs">Loading ~/.openclaw/openclaw.json…</span></>
+        ) : localError ? (
+          <>
+            <AlertCircle size={20} className="text-red-400" />
+            <span className="text-xs text-red-400 text-center max-w-xs">{localError}</span>
+            <button
+              onClick={() => void loadLocalFile()}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-300 rounded-lg"
+            >
+              <RefreshCw size={12} />Retry
+            </button>
+          </>
+        ) : null}
+      </div>
+    );
+  }
+
+  // Kubernetes (or no file loaded yet): show SourcePanel
   if (!raw || showSource) {
     return (
       <div className="flex flex-col h-full overflow-y-auto">
@@ -960,9 +1013,15 @@ export default function OcFileConfigPanel({ instanceName }: Props) {
     <div className="flex flex-col h-full overflow-hidden">
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border-b border-gray-700 flex-shrink-0">
-        <button onClick={() => setShowSource(true)} className="text-xs text-gray-400 hover:text-gray-200 font-mono truncate max-w-xs" title={filePath}>
-          {filePath || 'openclaw.json'}
-        </button>
+        {isLocalDeploy ? (
+          <span className="text-xs text-gray-500 font-mono truncate max-w-xs flex items-center gap-1">
+            <HardDrive size={11} className="text-blue-400" />{filePath || '~/.openclaw/openclaw.json'}
+          </span>
+        ) : (
+          <button onClick={() => setShowSource(true)} className="text-xs text-gray-400 hover:text-gray-200 font-mono truncate max-w-xs" title={filePath}>
+            {filePath || 'openclaw.json'}
+          </button>
+        )}
         <div className="ml-auto flex items-center gap-2">
           {/* View toggle */}
           <div className="flex items-center bg-gray-700 rounded p-0.5">

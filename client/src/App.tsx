@@ -94,11 +94,11 @@ export default function App() {
     setSelectedInstance(null);
   };
 
-  const handleCreateInstance = async (name: string) => {
+  const handleCreateInstance = async (name: string, deployType: string) => {
     const res = await fetch('/api/instances', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, deployType }),
     });
     if (!res.ok) {
       const data = await res.json() as { error: string };
@@ -106,7 +106,7 @@ export default function App() {
     }
     await fetchInstances();
     setSelectedInstance(name);
-    setCreateModalOpen(false);
+    // Modal closes itself via onClose — do NOT call setCreateModalOpen(false) here
   };
 
   const handleDeleteInstance = async (name: string) => {
@@ -153,6 +153,7 @@ export default function App() {
             <InstanceEditor
               key={selectedInstance}
               instanceName={selectedInstance}
+              deployType={instances.find(i => i.name === selectedInstance)?.deployType}
             />
           ) : (
             <div className="flex flex-col items-center justify-center flex-1 text-gray-500">
@@ -227,7 +228,7 @@ export default function App() {
       {createModalOpen && (
         <CreateInstanceModal
           onClose={() => setCreateModalOpen(false)}
-          onCreate={handleCreateInstance}
+          onCreate={(name, deployType) => handleCreateInstance(name, deployType)}
         />
       )}
     </div>

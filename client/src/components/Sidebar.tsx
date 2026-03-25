@@ -106,6 +106,11 @@ export default function Sidebar({
                 selectedInstance === instance.name ? 'bg-blue-200' : 'bg-gray-500'
               }`} />
               <span className="text-sm font-medium truncate">{instance.name}</span>
+              {instance.deployType && instance.deployType !== 'kubernetes' && (
+                <span className={`text-[9px] px-1 py-0.5 rounded flex-shrink-0 font-medium ${
+                  selectedInstance === instance.name ? 'bg-blue-500 text-blue-100' : 'bg-gray-700 text-gray-400'
+                }`}>{instance.deployType}</span>
+              )}
             </div>
             <button
               onClick={(e) => void handleDelete(e, instance.name)}

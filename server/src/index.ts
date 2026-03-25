@@ -134,12 +134,18 @@ app.get('/api/instances', (_req: Request, res: Response) => {
     const entries = fs.readdirSync(INSTANCES_DIR, { withFileTypes: true });
     const instances = entries
       .filter(e => e.isDirectory())
-      .map(e => ({
-        name: e.name,
-        files: YAML_FILES.filter(f =>
-          fs.existsSync(path.join(INSTANCES_DIR, e.name, f))
-        ),
-      }));
+      .map(e => {
+        const metaPath = path.join(INSTANCES_DIR, e.name, 'instance.json');
+        let deployType: string | undefined;
+        if (fs.existsSync(metaPath)) {
+          try { deployType = (JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { deployType?: string }).deployType; } catch { /* ignore */ }
+        }
+        return {
+          name: e.name,
+          deployType: deployType ?? 'kubernetes',
+          files: YAML_FILES.filter(f => fs.existsSync(path.join(INSTANCES_DIR, e.name, f))),
+        };
+      });
     return res.json(instances);
   } catch (err) {
     return res.status(500).json({ error: String(err) });
@@ -148,7 +154,7 @@ app.get('/api/instances', (_req: Request, res: Response) => {
 
 // POST /api/instances
 app.post('/api/instances', (req: Request, res: Response) => {
-  const { name } = req.body as { name: string };
+  const { name, deployType = 'kubernetes' } = req.body as { name: string; deployType?: string };
   if (!name || !/^[a-z0-9-]+$/.test(name)) {
     return res.status(400).json({ error: 'Invalid instance name. Use lowercase letters, numbers, and dashes only.' });
   }
@@ -160,17 +166,23 @@ app.post('/api/instances', (req: Request, res: Response) => {
 
   try {
     fs.mkdirSync(instanceDir, { recursive: true });
+    // Save metadata
+    fs.writeFileSync(path.join(instanceDir, 'instance.json'), JSON.stringify({ name, deployType }, null, 2), 'utf-8');
 
-    for (const file of YAML_FILES) {
-      const templatePath = path.join(TEMPLATES_DIR, file);
-      if (fs.existsSync(templatePath)) {
-        let content = fs.readFileSync(templatePath, 'utf-8');
-        content = replaceOpenclaw(content, name);
-        fs.writeFileSync(path.join(instanceDir, file), content, 'utf-8');
+    const files: string[] = [];
+    if (deployType === 'kubernetes') {
+      for (const file of YAML_FILES) {
+        const templatePath = path.join(TEMPLATES_DIR, file);
+        if (fs.existsSync(templatePath)) {
+          let content = fs.readFileSync(templatePath, 'utf-8');
+          content = replaceOpenclaw(content, name);
+          fs.writeFileSync(path.join(instanceDir, file), content, 'utf-8');
+          files.push(file);
+        }
       }
     }
 
-    return res.status(201).json({ name, files: YAML_FILES });
+    return res.status(201).json({ name, deployType, files });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -275,6 +287,68 @@ app.post('/api/instances/:name/deploy', (req: Request, res: Response) => {
     res.write(`\nError: ${err.message}\n`);
     res.end();
   });
+});
+
+// POST /api/instances/:name/local-install  – stream installation output
+app.post('/api/instances/:name/local-install', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const instanceDir = path.join(INSTANCES_DIR, name);
+  if (!fs.existsSync(instanceDir)) {
+    return res.status(404).json({ error: `Instance "${name}" not found.` });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const send = (type: 'log' | 'done' | 'error', text: string) => {
+    res.write(`data: ${JSON.stringify({ type, text })}\n\n`);
+  };
+
+  // Chain of commands to run sequentially
+  const STEPS: Array<{ label: string; cmd: string; args: string[] }> = [
+    { label: 'npm install -g openclaw@latest', cmd: 'npm', args: ['install', '-g', 'openclaw@latest'] },
+  ];
+
+  let stepIdx = 0;
+
+  const runNext = () => {
+    if (stepIdx >= STEPS.length) {
+      send('log', '\n✓ Installation completed.\n');
+      send('done', 'success');
+      res.end();
+      return;
+    }
+    const step = STEPS[stepIdx++];
+    send('log', `\n▶ ${step.label}\n`);
+
+    const child = spawn(step.cmd, step.args, {
+      env: process.env,
+      shell: process.platform === 'win32',
+    });
+
+    child.stdout.on('data', (d: Buffer) => send('log', d.toString()));
+    child.stderr.on('data', (d: Buffer) => send('log', d.toString()));
+
+    child.on('close', (code: number | null) => {
+      if (code !== 0) {
+        send('log', `\n✗ Step failed with exit code ${code}.\n`);
+        send('done', 'error');
+        res.end();
+      } else {
+        runNext();
+      }
+    });
+
+    child.on('error', (err: Error) => {
+      send('log', `\nError: ${err.message}\n`);
+      send('done', 'error');
+      res.end();
+    });
+  };
+
+  runNext();
 });
 
 // GET /api/instances/:name/status
@@ -540,6 +614,13 @@ app.post('/api/instances/:name/openclaw/chat', async (req: Request, res: Respons
 
 // ── OC File Config (openclaw.json via kubectl or local) ──────────────────────
 
+function expandHome(p: string): string {
+  if (p.startsWith('~/') || p === '~') {
+    return path.join(process.env.HOME ?? process.env.USERPROFILE ?? '', p.slice(1));
+  }
+  return p;
+}
+
 const OC_FILE_SOURCE = 'openclaw-file-source.json';
 const OC_FILE_DEFAULT_PATH = '~/.openclaw/openclaw.json';
 
@@ -631,7 +712,7 @@ app.get('/api/instances/:name/oc-config/file', async (req: Request, res: Respons
   const { name } = req.params;
   const src = readOcFileSource(name);
   if (src.type === 'local') {
-    const localPath = src.localPath ?? `${process.env.HOME}/.openclaw/openclaw.json`;
+    const localPath = expandHome(src.localPath ?? `${process.env.HOME ?? '~'}/.openclaw/openclaw.json`);
     ocLog(name, 'info', 'config', `read local file: ${localPath}`);
     if (!fs.existsSync(localPath)) {
       ocLog(name, 'error', 'config', `file not found: ${localPath}`);
@@ -671,7 +752,7 @@ app.put('/api/instances/:name/oc-config/file', async (req: Request, res: Respons
 
   const src = readOcFileSource(name);
   if (src.type === 'local') {
-    const localPath = src.localPath ?? `${process.env.HOME}/.openclaw/openclaw.json`;
+    const localPath = expandHome(src.localPath ?? `${process.env.HOME ?? '~'}/.openclaw/openclaw.json`);
     ocLog(name, 'info', 'config', `write local file: ${localPath} (${content.length} bytes)`);
     try {
       fs.writeFileSync(localPath, content, 'utf-8');

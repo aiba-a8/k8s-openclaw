@@ -13,6 +13,7 @@ type MainTab = 'files' | 'openclaw';
 
 interface InstanceEditorProps {
   instanceName: string;
+  deployType?: string;
 }
 
 const FILE_LABELS: Record<YamlFileName, string> = {
@@ -26,8 +27,9 @@ const FILE_LABELS: Record<YamlFileName, string> = {
 // Files that have form support
 const FORM_SUPPORTED: YamlFileName[] = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml'];
 
-export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
-  const [mainTab, setMainTab] = useState<MainTab>('files');
+export default function InstanceEditor({ instanceName, deployType }: InstanceEditorProps) {
+  const isLocal = deployType === 'local';
+  const [mainTab, setMainTab] = useState<MainTab>(isLocal ? 'openclaw' : 'files');
   const [selectedFile, setSelectedFile] = useState<YamlFileName>('deployment.yaml');
   const [viewMode, setViewMode] = useState<ViewMode>('form');
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
@@ -206,12 +208,14 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
           </div>
           {/* Main tab switcher */}
           <div className="flex items-center bg-gray-700 rounded-md p-0.5">
-            <button
-              onClick={() => setMainTab('files')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'files' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
-            >
-              <FileCode size={12} />Files
-            </button>
+            {!isLocal && (
+              <button
+                onClick={() => setMainTab('files')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'files' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+              >
+                <FileCode size={12} />Files
+              </button>
+            )}
             <button
               onClick={() => setMainTab('openclaw')}
               className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'openclaw' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
@@ -220,23 +224,25 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
             </button>
           </div>
         </div>
-        <button
-          onClick={() => void handleDeploy()}
-          disabled={deploying}
-          className="flex items-center gap-2 px-4 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-green-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors"
-        >
-          {deploying ? (
-            <><Loader2 size={14} className="animate-spin" />Deploying...</>
-          ) : (
-            <><Rocket size={14} />Deploy</>
-          )}
-        </button>
+        {!isLocal && (
+          <button
+            onClick={() => void handleDeploy()}
+            disabled={deploying}
+            className="flex items-center gap-2 px-4 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-green-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors"
+          >
+            {deploying ? (
+              <><Loader2 size={14} className="animate-spin" />Deploying...</>
+            ) : (
+              <><Rocket size={14} />Deploy</>
+            )}
+          </button>
+        )}
       </div>
 
       {/* OpenClaw Connect Panel */}
       {mainTab === 'openclaw' && (
         <div className="flex-1 overflow-hidden">
-          <OpenClawPanel instanceName={instanceName} />
+          <OpenClawPanel instanceName={instanceName} deployType={deployType} />
         </div>
       )}
 
