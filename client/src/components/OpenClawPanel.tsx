@@ -2,21 +2,19 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   WifiOff, Loader2, AlertCircle, Bot, Radio,
   Settings2, RefreshCw, CheckCircle2, XCircle,
-  Power, Unplug, Save, X, Edit3, Cpu, FileJson,
+  Power, Unplug, Save, X, Edit3, Cpu,
 } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
-import OcFileConfigPanel from './OcFileConfigPanel';
 
 interface Props {
   instanceName: string;
-  deployType?: string;
   gatewayToken?: string;
   autoOpenSettings?: boolean;
   onAutoOpenHandled?: () => void;
 }
 
 type ConnStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-type SubTab = 'agents' | 'channels' | 'models' | 'config';
+type SubTab = 'agents' | 'channels' | 'models';
 
 interface AgentIdentity {
   name?: string;
@@ -437,12 +435,12 @@ function PairingGuide({ info, onRetry, onDismiss }: { info: PairingInfo; onRetry
 }
 
 // ── Main Panel ─────────────────────────────────────────────────────────────────
-export default function OpenClawPanel({ instanceName, deployType, gatewayToken, autoOpenSettings, onAutoOpenHandled }: Props) {
+export default function OpenClawPanel({ instanceName, gatewayToken, autoOpenSettings, onAutoOpenHandled }: Props) {
   const [status, setStatus] = useState<ConnStatus>('disconnected');
   const [connError, setConnError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [subTab, setSubTab] = useState<SubTab>('config');
+  const [subTab, setSubTab] = useState<SubTab>('agents');
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const pollRef = useRef<NodeJS.Timeout>();
 
@@ -506,11 +504,10 @@ export default function OpenClawPanel({ instanceName, deployType, gatewayToken, 
 
   const isConnected = status === 'connected';
 
-  const ALL_TABS: { id: SubTab; label: string; icon: React.ReactNode; requiresConnection?: boolean }[] = [
-    { id: 'agents', label: 'Agents', icon: <Bot size={13} />, requiresConnection: true },
-    { id: 'channels', label: 'Channels', icon: <Radio size={13} />, requiresConnection: true },
-    { id: 'models', label: 'Models', icon: <Cpu size={13} />, requiresConnection: true },
-    { id: 'config', label: 'Config', icon: <FileJson size={13} /> },
+  const ALL_TABS: { id: SubTab; label: string; icon: React.ReactNode }[] = [
+    { id: 'agents', label: 'Agents', icon: <Bot size={13} /> },
+    { id: 'channels', label: 'Channels', icon: <Radio size={13} /> },
+    { id: 'models', label: 'Models', icon: <Cpu size={13} /> },
   ];
 
   return (
@@ -563,27 +560,28 @@ export default function OpenClawPanel({ instanceName, deployType, gatewayToken, 
         </div>
       )}
 
-      {/* Tabs — Config always available; Agents/Channels/Models require connection */}
+      {/* Sub-tabs (Agents / Channels / Models) — require connection */}
       {!showSettings && (
         <>
-          <div className="flex border-b border-gray-700 bg-gray-800/50 flex-shrink-0">
-            {ALL_TABS.filter(t => !t.requiresConnection || isConnected).map(t => (
-              <button
-                key={t.id}
-                onClick={() => setSubTab(t.id)}
-                className={`flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors ${
-                  subTab === t.id
-                    ? 'text-blue-400 border-blue-400'
-                    : 'text-gray-400 hover:text-gray-200 border-transparent'
-                }`}
-              >
-                {t.icon}{t.label}
-              </button>
-            ))}
-          </div>
+          {isConnected && (
+            <div className="flex border-b border-gray-700 bg-gray-800/50 flex-shrink-0">
+              {ALL_TABS.map(t => (
+                <button
+                  key={t.id}
+                  onClick={() => setSubTab(t.id)}
+                  className={`flex items-center gap-1.5 px-3 py-2 text-xs border-b-2 transition-colors ${
+                    subTab === t.id
+                      ? 'text-blue-400 border-blue-400'
+                      : 'text-gray-400 hover:text-gray-200 border-transparent'
+                  }`}
+                >
+                  {t.icon}{t.label}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex-1 overflow-hidden">
-            {subTab === 'config' && <OcFileConfigPanel instanceName={instanceName} deployType={deployType} />}
-            {subTab !== 'config' && !isConnected && !pairingInfo && (
+            {!isConnected && !pairingInfo && (
               <div className="flex flex-col items-center justify-center h-full text-gray-600 gap-3">
                 {status === 'error' ? <XCircle size={32} className="text-red-500/40" /> : <WifiOff size={32} className="opacity-30" />}
                 <div className="text-sm text-center">
@@ -601,16 +599,16 @@ export default function OpenClawPanel({ instanceName, deployType, gatewayToken, 
                 </button>
               </div>
             )}
-            {subTab !== 'config' && !isConnected && pairingInfo && (
+            {!isConnected && pairingInfo && (
               <PairingGuide
                 info={pairingInfo}
                 onRetry={() => void handleConnect()}
                 onDismiss={() => { setPairingInfo(null); setConnError(null); setStatus('disconnected'); }}
               />
             )}
-            {subTab === 'agents' && isConnected && <AgentsView instanceName={instanceName} />}
-            {subTab === 'channels' && isConnected && <ChannelsView instanceName={instanceName} />}
-            {subTab === 'models' && isConnected && <ModelsView instanceName={instanceName} />}
+            {isConnected && subTab === 'agents' && <AgentsView instanceName={instanceName} />}
+            {isConnected && subTab === 'channels' && <ChannelsView instanceName={instanceName} />}
+            {isConnected && subTab === 'models' && <ModelsView instanceName={instanceName} />}
           </div>
         </>
       )}

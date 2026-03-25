@@ -7,9 +7,10 @@ import PvcForm from './PvcForm';
 import ServiceForm from './ServiceForm';
 import ConfigMapForm from './ConfigMapForm';
 import OpenClawPanel from './OpenClawPanel';
+import OcFileConfigPanel from './OcFileConfigPanel';
 import { ViewMode, YamlFileName, YAML_FILES } from '../types';
 
-type MainTab = 'files' | 'openclaw' | 'info';
+type MainTab = 'info' | 'openclaw' | 'config' | 'files';
 
 interface InstanceEditorProps {
   instanceName: string;
@@ -104,7 +105,7 @@ const FORM_SUPPORTED: YamlFileName[] = ['deployment.yaml', 'service.yaml', 'pvc.
 
 export default function InstanceEditor({ instanceName, deployType, gatewayToken, createdAt, onDeployStart, onDeployEnd }: InstanceEditorProps) {
   const isLocal = deployType === 'local';
-  const [mainTab, setMainTab] = useState<MainTab>(isLocal ? 'openclaw' : 'files');
+  const [mainTab, setMainTab] = useState<MainTab>(isLocal ? 'config' : 'info');
   const [deploySucceeded, setDeploySucceeded] = useState(false);
   const [selectedFile, setSelectedFile] = useState<YamlFileName>('deployment.yaml');
   const [viewMode, setViewMode] = useState<ViewMode>('form');
@@ -302,14 +303,12 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
           </div>
           {/* Main tab switcher */}
           <div className="flex items-center bg-gray-700 rounded-md p-0.5">
-            {!isLocal && (
-              <button
-                onClick={() => setMainTab('files')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'files' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
-              >
-                <FileCode size={12} />Files
-              </button>
-            )}
+            <button
+              onClick={() => setMainTab('info')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'info' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              <Info size={12} />Info
+            </button>
             <button
               onClick={() => setMainTab('openclaw')}
               className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'openclaw' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
@@ -317,11 +316,19 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
               <Wifi size={12} />Connect
             </button>
             <button
-              onClick={() => setMainTab('info')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'info' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+              onClick={() => setMainTab('config')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'config' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
             >
-              <Info size={12} />Info
+              <FileCode size={12} />Config
             </button>
+            {!isLocal && (
+              <button
+                onClick={() => setMainTab('files')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'files' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+              >
+                <Rocket size={12} />Deploy
+              </button>
+            )}
           </div>
         </div>
         {!isLocal && (
@@ -349,16 +356,22 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
         />
       )}
 
-      {/* OpenClaw Connect Panel */}
+      {/* Connect Panel */}
       {mainTab === 'openclaw' && (
         <div className="flex-1 overflow-hidden">
           <OpenClawPanel
             instanceName={instanceName}
-            deployType={deployType}
             gatewayToken={gatewayToken}
             autoOpenSettings={deploySucceeded}
             onAutoOpenHandled={() => setDeploySucceeded(false)}
           />
+        </div>
+      )}
+
+      {/* Config Panel */}
+      {mainTab === 'config' && (
+        <div className="flex-1 overflow-hidden">
+          <OcFileConfigPanel instanceName={instanceName} deployType={deployType} />
         </div>
       )}
 
