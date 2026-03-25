@@ -294,7 +294,12 @@ function BindingsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
   const cfg = JSON.parse(raw) as { bindings?: BindingEntry[]; agents?: { list?: AgentEntry[] } };
   const bindings: BindingEntry[] = cfg.bindings ?? [];
   const agentIds = cfg.agents?.list?.map(a => a.id) ?? [];
-  const CHANNELS = ['discord', 'slack', 'telegram', 'whatsapp', 'signal', 'imessage', 'msteams', 'googlechat', 'irc'];
+  const CHANNELS = [
+    'discord', 'slack', 'telegram', 'whatsapp', 'signal', 'imessage',
+    'msteams', 'googlechat', 'irc', 'matrix', 'mattermost', 'line',
+    'feishu', 'bluebubbles', 'synology-chat', 'nextcloud-talk',
+    'twitch', 'tlon', 'nostr', 'zalo', 'zalouser',
+  ];
 
   const update = (next: BindingEntry[]) => onChange(patchJson(raw, c => { c.bindings = next; }));
 
@@ -533,7 +538,12 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
 }
 
 // ── Channel config field metadata ─────────────────────────────────────────────
-const KNOWN_CHANNELS = ['discord', 'slack', 'telegram', 'whatsapp', 'signal', 'imessage', 'msteams', 'googlechat', 'irc'];
+const KNOWN_CHANNELS = [
+  'discord', 'slack', 'telegram', 'whatsapp', 'signal', 'imessage',
+  'msteams', 'googlechat', 'irc', 'matrix', 'mattermost', 'line',
+  'feishu', 'bluebubbles', 'synology-chat', 'nextcloud-talk',
+  'twitch', 'tlon', 'nostr', 'zalo', 'zalouser',
+];
 
 type FieldMeta =
   | { type: 'boolean'; label: string }
