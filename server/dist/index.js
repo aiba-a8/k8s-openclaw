@@ -46,6 +46,7 @@ const pty = __importStar(require("@homebridge/node-pty-prebuilt-multiarch"));
 const child_process_1 = require("child_process");
 const crypto_1 = require("crypto");
 const url = __importStar(require("url"));
+const openclaw_client_1 = require("./openclaw-client");
 const app = (0, express_1.default)();
 const PORT = 3001;
 app.use((0, cors_1.default)());
@@ -269,6 +270,193 @@ app.get('/api/instances/:name/status', (req, res) => {
     child.on('error', (err) => {
         return res.status(500).json({ error: err.message });
     });
+});
+// ── OpenClaw connection routes ────────────────────────────────────────────────
+const OC_CONFIG_FILE = 'openclaw-connection.json';
+function readOcConfig(instanceName) {
+    const filePath = path.join(INSTANCES_DIR, instanceName, OC_CONFIG_FILE);
+    if (!fs.existsSync(filePath))
+        return null;
+    try {
+        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    }
+    catch {
+        return null;
+    }
+}
+function writeOcConfig(instanceName, cfg) {
+    const filePath = path.join(INSTANCES_DIR, instanceName, OC_CONFIG_FILE);
+    fs.writeFileSync(filePath, JSON.stringify(cfg, null, 2), 'utf-8');
+}
+// GET /api/instances/:name/openclaw/settings
+app.get('/api/instances/:name/openclaw/settings', (req, res) => {
+    const cfg = readOcConfig(req.params.name);
+    if (!cfg)
+        return res.json({ url: '', token: '' });
+    // Don't return private key
+    return res.json({ url: cfg.url, token: cfg.token });
+});
+// PUT /api/instances/:name/openclaw/settings
+app.put('/api/instances/:name/openclaw/settings', (req, res) => {
+    const { name } = req.params;
+    let { url: ocUrl, token } = req.body;
+    if (!ocUrl || !token)
+        return res.status(400).json({ error: 'url and token required' });
+    // Normalize URL: ensure ws:// or wss:// prefix
+    ocUrl = ocUrl.trim();
+    if (ocUrl.startsWith('http://'))
+        ocUrl = 'ws://' + ocUrl.slice(7);
+    else if (ocUrl.startsWith('https://'))
+        ocUrl = 'wss://' + ocUrl.slice(8);
+    else if (!ocUrl.startsWith('ws://') && !ocUrl.startsWith('wss://')) {
+        ocUrl = 'ws://' + ocUrl.replace(/^\/\//, '');
+    }
+    // Preserve device keypair if exists
+    const existing = readOcConfig(name) ?? {};
+    writeOcConfig(name, { ...existing, url: ocUrl, token });
+    // If client exists with different config, disconnect it
+    (0, openclaw_client_1.removeClient)(name);
+    return res.json({ ok: true });
+});
+// POST /api/instances/:name/openclaw/connect
+app.post('/api/instances/:name/openclaw/connect', async (req, res) => {
+    const { name } = req.params;
+    const cfg = readOcConfig(name);
+    if (!cfg || !cfg.url || !cfg.token) {
+        return res.status(400).json({ error: 'Connection not configured. Set url and token first.' });
+    }
+    (0, openclaw_client_1.removeClient)(name);
+    const client = (0, openclaw_client_1.getOrCreateClient)(name, cfg);
+    try {
+        await client.connect();
+        // Save device keypair for next time
+        const kp = client.getDeviceKeypair();
+        writeOcConfig(name, { ...cfg, ...kp });
+        return res.json({ ok: true });
+    }
+    catch (err) {
+        (0, openclaw_client_1.removeClient)(name);
+        return res.status(502).json({ error: String(err) });
+    }
+});
+// POST /api/instances/:name/openclaw/disconnect
+app.post('/api/instances/:name/openclaw/disconnect', (req, res) => {
+    (0, openclaw_client_1.removeClient)(req.params.name);
+    return res.json({ ok: true });
+});
+// GET /api/instances/:name/openclaw/status
+app.get('/api/instances/:name/openclaw/status', (req, res) => {
+    const client = (0, openclaw_client_1.getClient)(req.params.name);
+    if (!client)
+        return res.json({ status: 'disconnected', error: null });
+    return res.json({ status: client.getStatus(), error: client.getLastError() });
+});
+// GET /api/instances/:name/openclaw/agents
+app.get('/api/instances/:name/openclaw/agents', async (req, res) => {
+    const client = (0, openclaw_client_1.getClient)(req.params.name);
+    if (!client || client.getStatus() !== 'connected')
+        return res.status(503).json({ error: 'Not connected' });
+    try {
+        const result = await client.rpc('agents.list');
+        return res.json(result);
+    }
+    catch (err) {
+        return res.status(502).json({ error: String(err) });
+    }
+});
+// GET /api/instances/:name/openclaw/channels
+app.get('/api/instances/:name/openclaw/channels', async (req, res) => {
+    const client = (0, openclaw_client_1.getClient)(req.params.name);
+    if (!client || client.getStatus() !== 'connected')
+        return res.status(503).json({ error: 'Not connected' });
+    try {
+        const result = await client.rpc('channels.status', { probe: false, timeoutMs: 5000 });
+        return res.json(result);
+    }
+    catch (err) {
+        return res.status(502).json({ error: String(err) });
+    }
+});
+// GET /api/instances/:name/openclaw/sessions
+app.get('/api/instances/:name/openclaw/sessions', async (req, res) => {
+    const client = (0, openclaw_client_1.getClient)(req.params.name);
+    if (!client || client.getStatus() !== 'connected')
+        return res.status(503).json({ error: 'Not connected' });
+    try {
+        const result = await client.rpc('sessions.list');
+        return res.json(result);
+    }
+    catch (err) {
+        return res.status(502).json({ error: String(err) });
+    }
+});
+// GET /api/instances/:name/openclaw/gateway-config
+app.get('/api/instances/:name/openclaw/gateway-config', async (req, res) => {
+    const client = (0, openclaw_client_1.getClient)(req.params.name);
+    if (!client || client.getStatus() !== 'connected')
+        return res.status(503).json({ error: 'Not connected' });
+    try {
+        const result = await client.rpc('config.get');
+        return res.json(result);
+    }
+    catch (err) {
+        return res.status(502).json({ error: String(err) });
+    }
+});
+// PUT /api/instances/:name/openclaw/gateway-config
+app.put('/api/instances/:name/openclaw/gateway-config', async (req, res) => {
+    const client = (0, openclaw_client_1.getClient)(req.params.name);
+    if (!client || client.getStatus() !== 'connected')
+        return res.status(503).json({ error: 'Not connected' });
+    try {
+        const result = await client.rpc('config.patch', { patch: req.body });
+        return res.json(result);
+    }
+    catch (err) {
+        return res.status(502).json({ error: String(err) });
+    }
+});
+// POST /api/instances/:name/openclaw/chat  – SSE streaming
+app.post('/api/instances/:name/openclaw/chat', async (req, res) => {
+    const client = (0, openclaw_client_1.getClient)(req.params.name);
+    if (!client || client.getStatus() !== 'connected') {
+        return res.status(503).json({ error: 'Not connected' });
+    }
+    const { message, sessionKey = 'agent:default:main' } = req.body;
+    if (!message)
+        return res.status(400).json({ error: 'message required' });
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    const writeEvent = (data) => {
+        res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+    const handler = (payload) => {
+        const p = payload;
+        if (p.sessionKey && p.sessionKey !== sessionKey)
+            return;
+        writeEvent(p);
+        if (p.state === 'final' || p.state === 'aborted' || p.state === 'error') {
+            client.off('event:chat', handler);
+            res.end();
+        }
+    };
+    client.on('event:chat', handler);
+    req.on('close', () => {
+        client.off('event:chat', handler);
+    });
+    try {
+        await client.rpc('chat.send', {
+            sessionKey,
+            message,
+            idempotencyKey: (0, crypto_1.randomUUID)(),
+        }, 30000);
+    }
+    catch (err) {
+        client.off('event:chat', handler);
+        writeEvent({ state: 'error', error: String(err) });
+        res.end();
+    }
 });
 // Serve static files in production
 const clientDist = path.join(__dirname, '../../client/dist');

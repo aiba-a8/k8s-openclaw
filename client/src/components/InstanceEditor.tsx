@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode } from 'lucide-react';
+import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode, Wifi } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import YamlFileEditor from './YamlFileEditor';
 import DeploymentForm from './DeploymentForm';
 import PvcForm from './PvcForm';
 import ServiceForm from './ServiceForm';
 import ConfigMapForm from './ConfigMapForm';
+import OpenClawPanel from './OpenClawPanel';
 import { ViewMode, YamlFileName, YAML_FILES } from '../types';
+
+type MainTab = 'files' | 'openclaw';
 
 interface InstanceEditorProps {
   instanceName: string;
@@ -24,6 +27,7 @@ const FILE_LABELS: Record<YamlFileName, string> = {
 const FORM_SUPPORTED: YamlFileName[] = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml'];
 
 export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
+  const [mainTab, setMainTab] = useState<MainTab>('files');
   const [selectedFile, setSelectedFile] = useState<YamlFileName>('deployment.yaml');
   const [viewMode, setViewMode] = useState<ViewMode>('form');
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
@@ -195,9 +199,26 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
     <div className="flex flex-col flex-1 overflow-hidden">
       {/* Top bar */}
       <div className="flex items-center justify-between px-4 py-2 bg-gray-800 border-b border-gray-700 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <FileCode size={16} className="text-blue-400" />
-          <span className="text-sm font-semibold text-gray-100">{instanceName}</span>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <FileCode size={16} className="text-blue-400" />
+            <span className="text-sm font-semibold text-gray-100">{instanceName}</span>
+          </div>
+          {/* Main tab switcher */}
+          <div className="flex items-center bg-gray-700 rounded-md p-0.5">
+            <button
+              onClick={() => setMainTab('files')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'files' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              <FileCode size={12} />Files
+            </button>
+            <button
+              onClick={() => setMainTab('openclaw')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'openclaw' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              <Wifi size={12} />Connect
+            </button>
+          </div>
         </div>
         <button
           onClick={() => void handleDeploy()}
@@ -205,20 +226,22 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
           className="flex items-center gap-2 px-4 py-1.5 bg-green-600 hover:bg-green-500 disabled:bg-green-800 disabled:text-green-300 disabled:cursor-not-allowed text-white text-sm font-medium rounded-md transition-colors"
         >
           {deploying ? (
-            <>
-              <Loader2 size={14} className="animate-spin" />
-              Deploying...
-            </>
+            <><Loader2 size={14} className="animate-spin" />Deploying...</>
           ) : (
-            <>
-              <Rocket size={14} />
-              Deploy
-            </>
+            <><Rocket size={14} />Deploy</>
           )}
         </button>
       </div>
 
-      {/* File tabs */}
+      {/* OpenClaw Connect Panel */}
+      {mainTab === 'openclaw' && (
+        <div className="flex-1 overflow-hidden">
+          <OpenClawPanel instanceName={instanceName} />
+        </div>
+      )}
+
+      {/* File tabs - only shown in files tab */}
+      {mainTab === 'files' && <>
       <div className="flex items-center gap-0 border-b border-gray-700 bg-gray-850 flex-shrink-0 overflow-x-auto" style={{ background: '#1a1f2e' }}>
         {YAML_FILES.map(file => (
           <button
@@ -308,6 +331,7 @@ export default function InstanceEditor({ instanceName }: InstanceEditorProps) {
           renderForm()
         )}
       </div>
+      </> /* end mainTab === 'files' */}
 
       {/* Deploy Output Modal */}
       {deployModalOpen && (

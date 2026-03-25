@@ -8,9 +8,38 @@ import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as url from 'url';
+import {
+  OpenClawConnectionConfig,
+  getOrCreateClient,
+  getClient,
+  removeClient,
+} from './openclaw-client';
 
 const app = express();
 const PORT = 3001;
+
+// ── Per-instance log buffer ───────────────────────────────────────────────────
+
+interface LogEntry {
+  ts: number;
+  level: 'info' | 'warn' | 'error';
+  tag: string;
+  message: string;
+  data?: unknown;
+}
+
+const instanceLogs = new Map<string, LogEntry[]>();
+const MAX_LOGS = 300;
+
+function ocLog(instanceName: string, level: LogEntry['level'], tag: string, message: string, data?: unknown) {
+  let logs = instanceLogs.get(instanceName);
+  if (!logs) { logs = []; instanceLogs.set(instanceName, logs); }
+  logs.push({ ts: Date.now(), level, tag, message, data });
+  if (logs.length > MAX_LOGS) logs.splice(0, logs.length - MAX_LOGS);
+  const prefix = `[${instanceName}][${tag}]`;
+  if (level === 'error') console.error(prefix, message, data ?? '');
+  else console.log(prefix, message, data === undefined ? '' : JSON.stringify(data, null, 2));
+}
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
@@ -273,6 +302,364 @@ app.get('/api/instances/:name/status', (req: Request, res: Response) => {
   child.on('error', (err: Error) => {
     return res.status(500).json({ error: err.message });
   });
+});
+
+// ── OpenClaw connection routes ────────────────────────────────────────────────
+
+const OC_CONFIG_FILE = 'openclaw-connection.json';
+
+function readOcConfig(instanceName: string): (OpenClawConnectionConfig & { deviceId?: string; privateKeyPem?: string; publicKeyBase64?: string }) | null {
+  const filePath = path.join(INSTANCES_DIR, instanceName, OC_CONFIG_FILE);
+  if (!fs.existsSync(filePath)) return null;
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf-8')); } catch { return null; }
+}
+
+function writeOcConfig(instanceName: string, cfg: object): void {
+  const filePath = path.join(INSTANCES_DIR, instanceName, OC_CONFIG_FILE);
+  fs.writeFileSync(filePath, JSON.stringify(cfg, null, 2), 'utf-8');
+}
+
+// GET /api/instances/:name/openclaw/settings
+app.get('/api/instances/:name/openclaw/settings', (req: Request, res: Response) => {
+  const cfg = readOcConfig(req.params.name);
+  if (!cfg) return res.json({ url: '', token: '' });
+  // Don't return private key
+  return res.json({ url: cfg.url, token: cfg.token });
+});
+
+// PUT /api/instances/:name/openclaw/settings
+app.put('/api/instances/:name/openclaw/settings', (req: Request, res: Response) => {
+  const { name } = req.params;
+  let { url: ocUrl, token } = req.body as { url: string; token: string };
+  if (!ocUrl || !token) return res.status(400).json({ error: 'url and token required' });
+
+  // Normalize URL: ensure ws:// or wss:// prefix
+  ocUrl = ocUrl.trim();
+  if (ocUrl.startsWith('http://')) ocUrl = 'ws://' + ocUrl.slice(7);
+  else if (ocUrl.startsWith('https://')) ocUrl = 'wss://' + ocUrl.slice(8);
+  else if (!ocUrl.startsWith('ws://') && !ocUrl.startsWith('wss://')) {
+    ocUrl = 'ws://' + ocUrl.replace(/^\/\//, '');
+  }
+
+  // Preserve device keypair if exists
+  const existing = readOcConfig(name) ?? {};
+  writeOcConfig(name, { ...existing, url: ocUrl, token });
+  // If client exists with different config, disconnect it
+  removeClient(name);
+  return res.json({ ok: true });
+});
+
+// POST /api/instances/:name/openclaw/connect
+app.post('/api/instances/:name/openclaw/connect', async (req: Request, res: Response) => {
+  const { name } = req.params;
+  const cfg = readOcConfig(name);
+  if (!cfg || !cfg.url || !cfg.token) {
+    return res.status(400).json({ error: 'Connection not configured. Set url and token first.' });
+  }
+
+  removeClient(name);
+  const client = getOrCreateClient(name, cfg);
+  ocLog(name, 'info', 'connect', `Connecting to ${cfg.url}`);
+
+  try {
+    await client.connect();
+    const kp = client.getDeviceKeypair();
+    writeOcConfig(name, { ...cfg, ...kp });
+    ocLog(name, 'info', 'connect', `Connected successfully, deviceId=${kp.deviceId}`);
+    return res.json({ ok: true });
+  } catch (err) {
+    const kp = client.getDeviceKeypair();
+    writeOcConfig(name, { ...cfg, ...kp });
+    removeClient(name);
+
+    const e = err as Error & { pairingRequired?: boolean; requestId?: string; deviceId?: string };
+    if (e.pairingRequired) {
+      ocLog(name, 'warn', 'connect', `Pairing required, deviceId=${e.deviceId}, requestId=${e.requestId}`);
+      return res.status(403).json({
+        error: e.message,
+        pairingRequired: true,
+        requestId: e.requestId,
+        deviceId: e.deviceId,
+      });
+    }
+    ocLog(name, 'error', 'connect', String(err));
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// POST /api/instances/:name/openclaw/disconnect
+app.post('/api/instances/:name/openclaw/disconnect', (req: Request, res: Response) => {
+  ocLog(req.params.name, 'info', 'connect', 'Disconnected by user');
+  removeClient(req.params.name);
+  return res.json({ ok: true });
+});
+
+// GET /api/instances/:name/openclaw/status
+app.get('/api/instances/:name/openclaw/status', (req: Request, res: Response) => {
+  const client = getClient(req.params.name);
+  if (!client) return res.json({ status: 'disconnected', error: null });
+  return res.json({ status: client.getStatus(), error: client.getLastError() });
+});
+
+// GET /api/instances/:name/openclaw/agents
+app.get('/api/instances/:name/openclaw/agents', async (req: Request, res: Response) => {
+  const { name } = req.params;
+  const client = getClient(name);
+  if (!client || client.getStatus() !== 'connected') return res.status(503).json({ error: 'Not connected' });
+  try {
+    ocLog(name, 'info', 'rpc', 'agents.list →');
+    const result = await client.rpc('agents.list');
+    ocLog(name, 'info', 'rpc', 'agents.list ←', result);
+    return res.json(result);
+  } catch (err) {
+    ocLog(name, 'error', 'rpc', `agents.list error: ${String(err)}`);
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// GET /api/instances/:name/openclaw/channels
+app.get('/api/instances/:name/openclaw/channels', async (req: Request, res: Response) => {
+  const { name } = req.params;
+  const client = getClient(name);
+  if (!client || client.getStatus() !== 'connected') return res.status(503).json({ error: 'Not connected' });
+  try {
+    ocLog(name, 'info', 'rpc', 'channels.status →');
+    const result = await client.rpc('channels.status', { probe: false, timeoutMs: 8000 });
+    ocLog(name, 'info', 'rpc', 'channels.status ←', result);
+    return res.json(result);
+  } catch (err) {
+    ocLog(name, 'error', 'rpc', `channels.status error: ${String(err)}`);
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// GET /api/instances/:name/openclaw/models
+app.get('/api/instances/:name/openclaw/models', async (req: Request, res: Response) => {
+  const { name } = req.params;
+  const client = getClient(name);
+  if (!client || client.getStatus() !== 'connected') return res.status(503).json({ error: 'Not connected' });
+  try {
+    ocLog(name, 'info', 'rpc', 'models.list →');
+    const result = await client.rpc('models.list');
+    ocLog(name, 'info', 'rpc', 'models.list ←', result);
+    return res.json(result);
+  } catch (err) {
+    ocLog(name, 'error', 'rpc', `models.list error: ${String(err)}`);
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// GET /api/instances/:name/openclaw/logs
+app.get('/api/instances/:name/openclaw/logs', (req: Request, res: Response) => {
+  const logs = instanceLogs.get(req.params.name) ?? [];
+  return res.json({ logs });
+});
+
+// GET /api/instances/:name/openclaw/sessions
+app.get('/api/instances/:name/openclaw/sessions', async (req: Request, res: Response) => {
+  const client = getClient(req.params.name);
+  if (!client || client.getStatus() !== 'connected') return res.status(503).json({ error: 'Not connected' });
+  try {
+    const result = await client.rpc('sessions.list');
+    return res.json(result);
+  } catch (err) {
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// GET /api/instances/:name/openclaw/gateway-config
+app.get('/api/instances/:name/openclaw/gateway-config', async (req: Request, res: Response) => {
+  const client = getClient(req.params.name);
+  if (!client || client.getStatus() !== 'connected') return res.status(503).json({ error: 'Not connected' });
+  try {
+    const result = await client.rpc('config.get');
+    return res.json(result);
+  } catch (err) {
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// PUT /api/instances/:name/openclaw/gateway-config
+app.put('/api/instances/:name/openclaw/gateway-config', async (req: Request, res: Response) => {
+  const client = getClient(req.params.name);
+  if (!client || client.getStatus() !== 'connected') return res.status(503).json({ error: 'Not connected' });
+  try {
+    const result = await client.rpc('config.patch', { patch: req.body });
+    return res.json(result);
+  } catch (err) {
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// POST /api/instances/:name/openclaw/chat  – SSE streaming
+app.post('/api/instances/:name/openclaw/chat', async (req: Request, res: Response) => {
+  const client = getClient(req.params.name);
+  if (!client || client.getStatus() !== 'connected') {
+    return res.status(503).json({ error: 'Not connected' });
+  }
+
+  const { message, sessionKey = 'agent:default:main' } = req.body as { message: string; sessionKey?: string };
+  if (!message) return res.status(400).json({ error: 'message required' });
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const writeEvent = (data: object) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const handler = (payload: unknown) => {
+    const p = payload as { state?: string; message?: unknown; runId?: string; sessionKey?: string };
+    if (p.sessionKey && p.sessionKey !== sessionKey) return;
+    writeEvent(p);
+    if (p.state === 'final' || p.state === 'aborted' || p.state === 'error') {
+      client.off('event:chat', handler);
+      res.end();
+    }
+  };
+
+  client.on('event:chat', handler);
+
+  req.on('close', () => {
+    client.off('event:chat', handler);
+  });
+
+  try {
+    await client.rpc('chat.send', {
+      sessionKey,
+      message,
+      idempotencyKey: randomUUID(),
+    }, 30000);
+  } catch (err) {
+    client.off('event:chat', handler);
+    writeEvent({ state: 'error', error: String(err) });
+    res.end();
+  }
+});
+
+// ── OC File Config (openclaw.json via kubectl or local) ──────────────────────
+
+const OC_FILE_SOURCE = 'openclaw-file-source.json';
+const OC_FILE_DEFAULT_PATH = '/root/.openclaw/openclaw.json';
+
+interface OcFileSource {
+  type: 'kubernetes' | 'local';
+  namespace?: string;
+  pod?: string;
+  container?: string;
+  filePath?: string;
+  localPath?: string;
+}
+
+function readOcFileSource(instanceName: string): OcFileSource {
+  const p = path.join(INSTANCES_DIR, instanceName, OC_FILE_SOURCE);
+  if (!fs.existsSync(p)) return { type: 'local', localPath: `${process.env.HOME ?? '~'}/.openclaw/openclaw.json` };
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as OcFileSource; } catch { return { type: 'local' }; }
+}
+
+function writeOcFileSource(instanceName: string, src: OcFileSource): void {
+  fs.writeFileSync(path.join(INSTANCES_DIR, instanceName, OC_FILE_SOURCE), JSON.stringify(src, null, 2), 'utf-8');
+}
+
+function spawnCollect(cmd: string, args: string[], stdin?: string): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args);
+    let stdout = ''; let stderr = '';
+    proc.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(stderr.trim() || `exit code ${code}`));
+    });
+    if (stdin !== undefined) { proc.stdin.write(stdin); proc.stdin.end(); }
+  });
+}
+
+function buildKubectlArgs(src: OcFileSource, baseArgs: string[]): string[] {
+  const args = [...baseArgs];
+  if (src.namespace) args.splice(1, 0, '-n', src.namespace);
+  if (src.container) args.splice(1, 0, '-c', src.container);
+  return args;
+}
+
+// GET /api/instances/:name/oc-config/source
+app.get('/api/instances/:name/oc-config/source', (req: Request, res: Response) => {
+  return res.json(readOcFileSource(req.params.name));
+});
+
+// PUT /api/instances/:name/oc-config/source
+app.put('/api/instances/:name/oc-config/source', (req: Request, res: Response) => {
+  const src = req.body as OcFileSource;
+  if (!['kubernetes', 'local'].includes(src.type)) return res.status(400).json({ error: 'invalid type' });
+  writeOcFileSource(req.params.name, src);
+  return res.json({ ok: true });
+});
+
+// GET /api/instances/:name/oc-config/pods?namespace=xxx
+app.get('/api/instances/:name/oc-config/pods', async (req: Request, res: Response) => {
+  const namespace = req.query.namespace as string | undefined;
+  const args = ['get', 'pods', '-o', 'json'];
+  if (namespace) args.push('-n', namespace);
+  try {
+    const { stdout } = await spawnCollect('kubectl', args);
+    const data = JSON.parse(stdout) as { items: Array<{
+      metadata: { name: string; namespace: string };
+      status: { phase: string; containerStatuses?: Array<{ ready: boolean }> };
+      spec: { containers: Array<{ name: string }> };
+    }> };
+    const pods = data.items.map(p => ({
+      name: p.metadata.name,
+      namespace: p.metadata.namespace,
+      status: p.status.phase,
+      ready: p.status.containerStatuses?.every(c => c.ready) ?? false,
+      containers: p.spec.containers.map(c => c.name),
+    }));
+    return res.json({ pods });
+  } catch (err) {
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
+// GET /api/instances/:name/oc-config/file
+app.get('/api/instances/:name/oc-config/file', async (req: Request, res: Response) => {
+  const src = readOcFileSource(req.params.name);
+  if (src.type === 'local') {
+    const localPath = src.localPath ?? `${process.env.HOME}/.openclaw/openclaw.json`;
+    if (!fs.existsSync(localPath)) return res.status(404).json({ error: `Not found: ${localPath}` });
+    try { return res.json({ content: fs.readFileSync(localPath, 'utf-8'), path: localPath }); }
+    catch (e) { return res.status(502).json({ error: String(e) }); }
+  }
+  if (!src.pod) return res.status(400).json({ error: 'No pod selected' });
+  const filePath = src.filePath || OC_FILE_DEFAULT_PATH;
+  try {
+    const args = buildKubectlArgs(src, ['exec', src.pod, '--', 'cat', filePath]);
+    const { stdout } = await spawnCollect('kubectl', args);
+    return res.json({ content: stdout, path: filePath });
+  } catch (err) { return res.status(502).json({ error: String(err) }); }
+});
+
+// PUT /api/instances/:name/oc-config/file
+app.put('/api/instances/:name/oc-config/file', async (req: Request, res: Response) => {
+  const { content } = req.body as { content: string };
+  if (!content) return res.status(400).json({ error: 'content required' });
+  try { JSON.parse(content); } catch (e) { return res.status(400).json({ error: `Invalid JSON: ${String(e)}` }); }
+
+  const src = readOcFileSource(req.params.name);
+  if (src.type === 'local') {
+    const localPath = src.localPath ?? `${process.env.HOME}/.openclaw/openclaw.json`;
+    try { fs.writeFileSync(localPath, content, 'utf-8'); return res.json({ ok: true }); }
+    catch (e) { return res.status(502).json({ error: String(e) }); }
+  }
+  if (!src.pod) return res.status(400).json({ error: 'No pod selected' });
+  const filePath = src.filePath || OC_FILE_DEFAULT_PATH;
+  const b64 = Buffer.from(content, 'utf-8').toString('base64');
+  try {
+    const args = buildKubectlArgs(src, ['exec', '-i', src.pod, '--', 'sh', '-c', `base64 -d > "${filePath}"`]);
+    await spawnCollect('kubectl', args, b64);
+    return res.json({ ok: true });
+  } catch (err) { return res.status(502).json({ error: String(err) }); }
 });
 
 // Serve static files in production

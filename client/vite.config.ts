@@ -3,6 +3,12 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    // Exclude Monaco from the bundle — load it from CDN at runtime
+    rollupOptions: {
+      external: ['monaco-editor'],
+    },
+  },
   server: {
     port: 5173,
     proxy: {

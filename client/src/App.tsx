@@ -1,12 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Terminal, Plus } from 'lucide-react';
+import { Terminal, Plus, ScrollText } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import InstanceEditor from './components/InstanceEditor';
 import TerminalPanel from './components/TerminalPanel';
+import LogsPanel from './components/LogsPanel';
 import CreateInstanceModal from './components/CreateInstanceModal';
 import LoginPage from './components/LoginPage';
 import { Instance } from './types';
 import { getToken, clearToken, authHeaders, verifyToken } from './utils/auth';
+
+type BottomTab = 'terminal' | 'logs';
 
 export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
@@ -14,6 +17,7 @@ export default function App() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
   const [terminalOpen, setTerminalOpen] = useState(true);
+  const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -138,23 +142,43 @@ export default function App() {
         </div>
       </div>
 
-      {/* Terminal Panel */}
+      {/* Bottom Panel: Terminal | Logs */}
       <div className={`flex flex-col border-t border-gray-700 transition-all duration-200 ${terminalOpen ? 'h-72' : 'h-9'}`}>
-        <div className="flex items-center justify-between px-3 py-1 bg-gray-800 border-b border-gray-700 flex-shrink-0">
-          <div className="flex items-center gap-2">
-            <Terminal size={14} className="text-gray-400" />
-            <span className="text-xs font-medium text-gray-300">Terminal</span>
-          </div>
+        {/* Bottom panel header */}
+        <div className="flex items-center bg-gray-800 border-b border-gray-700 flex-shrink-0" style={{ minHeight: '36px' }}>
+          {/* Tabs */}
+          <button
+            onClick={() => { setBottomTab('terminal'); setTerminalOpen(true); }}
+            className={`flex items-center gap-1.5 px-3 h-full text-xs border-b-2 transition-colors ${
+              bottomTab === 'terminal'
+                ? 'text-gray-100 border-blue-400'
+                : 'text-gray-400 hover:text-gray-200 border-transparent'
+            }`}
+          >
+            <Terminal size={13} />Terminal
+          </button>
+          <button
+            onClick={() => { setBottomTab('logs'); setTerminalOpen(true); }}
+            className={`flex items-center gap-1.5 px-3 h-full text-xs border-b-2 transition-colors ${
+              bottomTab === 'logs'
+                ? 'text-gray-100 border-blue-400'
+                : 'text-gray-400 hover:text-gray-200 border-transparent'
+            }`}
+          >
+            <ScrollText size={13} />Logs
+          </button>
           <button
             onClick={() => setTerminalOpen(prev => !prev)}
-            className="text-xs text-gray-400 hover:text-gray-200 px-2 py-0.5 rounded hover:bg-gray-700 transition-colors"
+            className="ml-auto text-xs text-gray-400 hover:text-gray-200 px-3 h-full hover:bg-gray-700 transition-colors"
           >
             {terminalOpen ? 'Hide' : 'Show'}
           </button>
         </div>
+
         {terminalOpen && (
           <div className="flex-1 overflow-hidden">
-            <TerminalPanel />
+            {bottomTab === 'terminal' && <TerminalPanel />}
+            {bottomTab === 'logs' && <LogsPanel instanceName={selectedInstance} />}
           </div>
         )}
       </div>
