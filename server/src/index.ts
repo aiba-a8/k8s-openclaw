@@ -174,7 +174,7 @@ app.get('/api/instances', (_req: Request, res: Response) => {
 
 // POST /api/instances
 app.post('/api/instances', (req: Request, res: Response) => {
-  const { name, deployType = 'kubernetes', gatewayToken } = req.body as { name: string; deployType?: string; gatewayToken?: string };
+  const { name, deployType = 'kubernetes', gatewayToken, registerOnly } = req.body as { name: string; deployType?: string; gatewayToken?: string; registerOnly?: boolean };
   if (!name || !/^[a-z0-9-]+$/.test(name)) {
     return res.status(400).json({ error: 'Invalid instance name. Use lowercase letters, numbers, and dashes only.' });
   }
@@ -187,10 +187,13 @@ app.post('/api/instances', (req: Request, res: Response) => {
   try {
     fs.mkdirSync(instanceDir, { recursive: true });
 
-    // For kubernetes: require a gateway token (auto-generate if not provided)
-    const resolvedToken = deployType === 'kubernetes'
-      ? (gatewayToken?.trim() || require('crypto').randomBytes(32).toString('hex') as string)
-      : undefined;
+    // For kubernetes full deploy: auto-generate token if not provided
+    // For register-only: use the token as-is (user provided)
+    const resolvedToken = registerOnly
+      ? (gatewayToken?.trim() || undefined)
+      : deployType === 'kubernetes'
+        ? (gatewayToken?.trim() || require('crypto').randomBytes(32).toString('hex') as string)
+        : undefined;
 
     // Save metadata
     const createdAt = new Date().toISOString();
@@ -200,14 +203,14 @@ app.post('/api/instances', (req: Request, res: Response) => {
       'utf-8',
     );
 
+    // For register-only: skip YAML template creation
     const files: string[] = [];
-    if (deployType === 'kubernetes') {
+    if (!registerOnly && deployType === 'kubernetes') {
       for (const file of YAML_FILES) {
         const templatePath = path.join(TEMPLATES_DIR, file);
         if (fs.existsSync(templatePath)) {
           let content = fs.readFileSync(templatePath, 'utf-8');
           content = replaceOpenclaw(content, name);
-          // Inject gateway token into secret.yaml
           if (file === 'secret.yaml' && resolvedToken) {
             content = content.replace('OPENCLAW_GATEWAY_TOKEN_VALUE', resolvedToken);
           }

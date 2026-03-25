@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode, Wifi, Info, Eye, EyeOff, Copy, Check } from 'lucide-react';
+import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode, Wifi, Info, Eye, EyeOff, Copy, Check, HardDrive } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import YamlFileEditor from './YamlFileEditor';
 import DeploymentForm from './DeploymentForm';
@@ -321,14 +321,12 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
             >
               <FileCode size={12} />Config
             </button>
-            {!isLocal && (
-              <button
-                onClick={() => setMainTab('files')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'files' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
-              >
-                <Rocket size={12} />Deploy
-              </button>
-            )}
+            <button
+              onClick={() => setMainTab('files')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded transition-colors ${mainTab === 'files' ? 'bg-gray-900 text-gray-100 shadow' : 'text-gray-400 hover:text-gray-200'}`}
+            >
+              <Rocket size={12} />Deploy
+            </button>
           </div>
         </div>
         {!isLocal && (
@@ -375,8 +373,18 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
         </div>
       )}
 
-      {/* File tabs - only shown in files tab */}
-      {mainTab === 'files' && <>
+      {/* Deploy tab — local: show info; kubernetes: YAML editor */}
+      {mainTab === 'files' && isLocal && (
+        <div className="flex flex-col items-center justify-center flex-1 text-gray-500 gap-3">
+          <HardDrive size={32} className="opacity-30" />
+          <div className="text-sm text-center">
+            <p className="text-gray-400 font-medium mb-1">Local deployment</p>
+            <p className="text-xs">This instance runs locally via npm. No Kubernetes manifests needed.</p>
+          </div>
+        </div>
+      )}
+
+      {mainTab === 'files' && !isLocal && <>
       <div className="flex items-center gap-0 border-b border-gray-700 bg-gray-850 flex-shrink-0 overflow-x-auto" style={{ background: '#1a1f2e' }}>
         {YAML_FILES.map(file => (
           <button

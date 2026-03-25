@@ -55,9 +55,11 @@ function patchJson(raw: string, fn: (cfg: Record<string, unknown>) => void): str
 
 // ── Source selector ───────────────────────────────────────────────────────────
 function SourcePanel({
-  instanceName, onLoad,
-}: { instanceName: string; onLoad: (content: string, path: string) => void }) {
-  const [src, setSrc] = useState<OcFileSource>({ type: 'local' });
+  instanceName, onLoad, deployType,
+}: { instanceName: string; onLoad: (content: string, path: string) => void; deployType?: string }) {
+  // Source type is determined by deployType — no manual switching
+  const sourceType: SourceType = deployType === 'kubernetes' ? 'kubernetes' : 'local';
+  const [src, setSrc] = useState<OcFileSource>({ type: sourceType });
   const [pods, setPods] = useState<Pod[]>([]);
   const [loadingPods, setLoadingPods] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -69,9 +71,9 @@ function SourcePanel({
   useEffect(() => {
     fetch(`/api/instances/${instanceName}/oc-config/source`, { headers: authHeaders() })
       .then(r => r.json())
-      .then((d: OcFileSource) => setSrc(d))
+      .then((d: OcFileSource) => setSrc({ ...d, type: sourceType }))
       .finally(() => setLoading(false));
-  }, [instanceName]);
+  }, [instanceName, sourceType]);
 
   const loadPods = async () => {
     setLoadingPods(true); setPodsError(null); setPods([]);
@@ -115,25 +117,12 @@ function SourcePanel({
 
   return (
     <div className="p-4 space-y-4 max-w-lg">
-      <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Config File Source</h3>
-
-      {/* Type selector */}
-      <div className="flex gap-2">
-        {(['kubernetes', 'local'] as SourceType[]).map(t => (
-          <button
-            key={t}
-            onClick={() => setSrc(s => ({ ...s, type: t }))}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-colors ${
-              src.type === t
-                ? 'bg-blue-600 border-blue-500 text-white'
-                : 'bg-gray-800 border-gray-600 text-gray-300 hover:border-gray-500'
-            }`}
-          >
-            {t === 'kubernetes' ? <Server size={13} /> : <HardDrive size={13} />}
-            {t === 'kubernetes' ? 'Kubernetes' : 'Local'}
-          </button>
-        ))}
-      </div>
+      <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-2">
+        {sourceType === 'kubernetes'
+          ? <><Server size={13} className="text-blue-400" />Kubernetes Config Source</>
+          : <><HardDrive size={13} className="text-blue-400" />Local Config Source</>
+        }
+      </h3>
 
       {src.type === 'kubernetes' && (
         <div className="space-y-3">
@@ -1004,7 +993,7 @@ export default function OcFileConfigPanel({ instanceName, deployType }: Props) {
             <button onClick={() => setShowSource(false)} className="text-xs text-gray-400 hover:text-gray-200">← Back</button>
           )}
         </div>
-        <SourcePanel instanceName={instanceName} onLoad={handleLoad} />
+        <SourcePanel instanceName={instanceName} onLoad={handleLoad} deployType={deployType} />
       </div>
     );
   }
@@ -1018,7 +1007,8 @@ export default function OcFileConfigPanel({ instanceName, deployType }: Props) {
             <HardDrive size={11} className="text-blue-400" />{filePath || '~/.openclaw/openclaw.json'}
           </span>
         ) : (
-          <button onClick={() => setShowSource(true)} className="text-xs text-gray-400 hover:text-gray-200 font-mono truncate max-w-xs" title={filePath}>
+          <button onClick={() => setShowSource(true)} className="text-xs text-gray-400 hover:text-gray-200 font-mono truncate max-w-xs flex items-center gap-1" title={filePath}>
+            {deployType === 'kubernetes' ? <Server size={11} className="text-blue-400 flex-shrink-0" /> : <HardDrive size={11} className="text-blue-400 flex-shrink-0" />}
             {filePath || 'openclaw.json'}
           </button>
         )}
