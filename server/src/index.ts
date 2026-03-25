@@ -541,7 +541,7 @@ app.post('/api/instances/:name/openclaw/chat', async (req: Request, res: Respons
 // ── OC File Config (openclaw.json via kubectl or local) ──────────────────────
 
 const OC_FILE_SOURCE = 'openclaw-file-source.json';
-const OC_FILE_DEFAULT_PATH = '/root/.openclaw/openclaw.json';
+const OC_FILE_DEFAULT_PATH = '~/.openclaw/openclaw.json';
 
 interface OcFileSource {
   type: 'kubernetes' | 'local';
@@ -599,9 +599,11 @@ app.put('/api/instances/:name/oc-config/source', (req: Request, res: Response) =
 
 // GET /api/instances/:name/oc-config/pods?namespace=xxx
 app.get('/api/instances/:name/oc-config/pods', async (req: Request, res: Response) => {
+  const { name } = req.params;
   const namespace = req.query.namespace as string | undefined;
   const args = ['get', 'pods', '-o', 'json'];
   if (namespace) args.push('-n', namespace);
+  ocLog(name, 'info', 'kubectl', `get pods${namespace ? ` -n ${namespace}` : ''}`);
   try {
     const { stdout } = await spawnCollect('kubectl', args);
     const data = JSON.parse(stdout) as { items: Array<{
@@ -616,50 +618,83 @@ app.get('/api/instances/:name/oc-config/pods', async (req: Request, res: Respons
       ready: p.status.containerStatuses?.every(c => c.ready) ?? false,
       containers: p.spec.containers.map(c => c.name),
     }));
+    ocLog(name, 'info', 'kubectl', `found ${pods.length} pod(s)`, pods.map(p => `${p.name} (${p.status})`));
     return res.json({ pods });
   } catch (err) {
+    ocLog(name, 'error', 'kubectl', `get pods failed: ${String(err)}`);
     return res.status(502).json({ error: String(err) });
   }
 });
 
 // GET /api/instances/:name/oc-config/file
 app.get('/api/instances/:name/oc-config/file', async (req: Request, res: Response) => {
-  const src = readOcFileSource(req.params.name);
+  const { name } = req.params;
+  const src = readOcFileSource(name);
   if (src.type === 'local') {
     const localPath = src.localPath ?? `${process.env.HOME}/.openclaw/openclaw.json`;
-    if (!fs.existsSync(localPath)) return res.status(404).json({ error: `Not found: ${localPath}` });
-    try { return res.json({ content: fs.readFileSync(localPath, 'utf-8'), path: localPath }); }
-    catch (e) { return res.status(502).json({ error: String(e) }); }
+    ocLog(name, 'info', 'config', `read local file: ${localPath}`);
+    if (!fs.existsSync(localPath)) {
+      ocLog(name, 'error', 'config', `file not found: ${localPath}`);
+      return res.status(404).json({ error: `Not found: ${localPath}` });
+    }
+    try {
+      const content = fs.readFileSync(localPath, 'utf-8');
+      ocLog(name, 'info', 'config', `loaded ${content.length} bytes from ${localPath}`);
+      return res.json({ content, path: localPath });
+    } catch (e) {
+      ocLog(name, 'error', 'config', `read failed: ${String(e)}`);
+      return res.status(502).json({ error: String(e) });
+    }
   }
   if (!src.pod) return res.status(400).json({ error: 'No pod selected' });
-  const filePath = src.filePath || OC_FILE_DEFAULT_PATH;
+  // Use sh -c to resolve ~ correctly for any container user (avoids /root permission denied)
+  const filePath = src.filePath || '~/.openclaw/openclaw.json';
+  const cmd = `sh -c 'cat ${filePath}'`;
+  ocLog(name, 'info', 'kubectl', `exec ${src.pod}: ${cmd}`);
   try {
-    const args = buildKubectlArgs(src, ['exec', src.pod, '--', 'cat', filePath]);
+    const args = buildKubectlArgs(src, ['exec', src.pod, '--', 'sh', '-c', `cat ${filePath}`]);
     const { stdout } = await spawnCollect('kubectl', args);
+    ocLog(name, 'info', 'kubectl', `read ${stdout.length} bytes from ${src.pod}:${filePath}`);
     return res.json({ content: stdout, path: filePath });
-  } catch (err) { return res.status(502).json({ error: String(err) }); }
+  } catch (err) {
+    ocLog(name, 'error', 'kubectl', `exec read failed: ${String(err)}`);
+    return res.status(502).json({ error: String(err) });
+  }
 });
 
 // PUT /api/instances/:name/oc-config/file
 app.put('/api/instances/:name/oc-config/file', async (req: Request, res: Response) => {
+  const { name } = req.params;
   const { content } = req.body as { content: string };
   if (!content) return res.status(400).json({ error: 'content required' });
   try { JSON.parse(content); } catch (e) { return res.status(400).json({ error: `Invalid JSON: ${String(e)}` }); }
 
-  const src = readOcFileSource(req.params.name);
+  const src = readOcFileSource(name);
   if (src.type === 'local') {
     const localPath = src.localPath ?? `${process.env.HOME}/.openclaw/openclaw.json`;
-    try { fs.writeFileSync(localPath, content, 'utf-8'); return res.json({ ok: true }); }
-    catch (e) { return res.status(502).json({ error: String(e) }); }
+    ocLog(name, 'info', 'config', `write local file: ${localPath} (${content.length} bytes)`);
+    try {
+      fs.writeFileSync(localPath, content, 'utf-8');
+      ocLog(name, 'info', 'config', `saved successfully: ${localPath}`);
+      return res.json({ ok: true });
+    } catch (e) {
+      ocLog(name, 'error', 'config', `write failed: ${String(e)}`);
+      return res.status(502).json({ error: String(e) });
+    }
   }
   if (!src.pod) return res.status(400).json({ error: 'No pod selected' });
-  const filePath = src.filePath || OC_FILE_DEFAULT_PATH;
+  const filePath = src.filePath || '~/.openclaw/openclaw.json';
   const b64 = Buffer.from(content, 'utf-8').toString('base64');
+  ocLog(name, 'info', 'kubectl', `exec ${src.pod}: write ${content.length} bytes to ${filePath}`);
   try {
-    const args = buildKubectlArgs(src, ['exec', '-i', src.pod, '--', 'sh', '-c', `base64 -d > "${filePath}"`]);
+    const args = buildKubectlArgs(src, ['exec', '-i', src.pod, '--', 'sh', '-c', `base64 -d > ${filePath}`]);
     await spawnCollect('kubectl', args, b64);
+    ocLog(name, 'info', 'kubectl', `saved successfully to ${src.pod}:${filePath}`);
     return res.json({ ok: true });
-  } catch (err) { return res.status(502).json({ error: String(err) }); }
+  } catch (err) {
+    ocLog(name, 'error', 'kubectl', `exec write failed: ${String(err)}`);
+    return res.status(502).json({ error: String(err) });
+  }
 });
 
 // Serve static files in production
