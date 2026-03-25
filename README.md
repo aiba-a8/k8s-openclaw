@@ -168,7 +168,6 @@ npm run dev
 ```
 
 - 前端：http://localhost:3000
-- 后端：http://localhost:3001
 
 ### 生产构建
 
