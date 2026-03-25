@@ -154,6 +154,7 @@ export default function App() {
               key={selectedInstance}
               instanceName={selectedInstance}
               deployType={instances.find(i => i.name === selectedInstance)?.deployType}
+              gatewayToken={instances.find(i => i.name === selectedInstance)?.gatewayToken}
             />
           ) : (
             <div className="flex flex-col items-center justify-center flex-1 text-gray-500">

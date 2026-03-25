@@ -10,6 +10,9 @@ import OcFileConfigPanel from './OcFileConfigPanel';
 interface Props {
   instanceName: string;
   deployType?: string;
+  gatewayToken?: string;
+  autoOpenSettings?: boolean;
+  onAutoOpenHandled?: () => void;
 }
 
 type ConnStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -54,8 +57,8 @@ interface PairingInfo {
 
 // ── Connection Settings ────────────────────────────────────────────────────────
 function ConnectionSettings({
-  instanceName, onSaved,
-}: { instanceName: string; onSaved: () => void }) {
+  instanceName, onSaved, initialToken,
+}: { instanceName: string; onSaved: () => void; initialToken?: string }) {
   const [ocUrl, setOcUrl] = useState('');
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(true);
@@ -65,9 +68,13 @@ function ConnectionSettings({
   useEffect(() => {
     fetch(`/api/instances/${instanceName}/openclaw/settings`, { headers: authHeaders() })
       .then(r => r.json())
-      .then((d: { url: string; token: string }) => { setOcUrl(d.url || ''); setToken(d.token || ''); })
+      .then((d: { url: string; token: string }) => {
+        setOcUrl(d.url || '');
+        // Pre-fill token from instance if not already saved
+        setToken(d.token || initialToken || '');
+      })
       .finally(() => setLoading(false));
-  }, [instanceName]);
+  }, [instanceName, initialToken]);
 
   const handleSave = async () => {
     setSaving(true); setError(null);
@@ -430,7 +437,7 @@ function PairingGuide({ info, onRetry, onDismiss }: { info: PairingInfo; onRetry
 }
 
 // ── Main Panel ─────────────────────────────────────────────────────────────────
-export default function OpenClawPanel({ instanceName, deployType }: Props) {
+export default function OpenClawPanel({ instanceName, deployType, gatewayToken, autoOpenSettings, onAutoOpenHandled }: Props) {
   const [status, setStatus] = useState<ConnStatus>('disconnected');
   const [connError, setConnError] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
@@ -438,6 +445,14 @@ export default function OpenClawPanel({ instanceName, deployType }: Props) {
   const [subTab, setSubTab] = useState<SubTab>('config');
   const [pairingInfo, setPairingInfo] = useState<PairingInfo | null>(null);
   const pollRef = useRef<NodeJS.Timeout>();
+
+  // Auto-open settings when deploy succeeds
+  useEffect(() => {
+    if (autoOpenSettings) {
+      setShowSettings(true);
+      onAutoOpenHandled?.();
+    }
+  }, [autoOpenSettings, onAutoOpenHandled]);
 
   const pollStatus = useCallback(() => {
     fetch(`/api/instances/${instanceName}/openclaw/status`, { headers: authHeaders() })
@@ -544,7 +559,7 @@ export default function OpenClawPanel({ instanceName, deployType }: Props) {
       {/* Settings panel */}
       {showSettings && (
         <div className="border-b border-gray-700 flex-shrink-0">
-          <ConnectionSettings instanceName={instanceName} onSaved={() => setShowSettings(false)} />
+          <ConnectionSettings instanceName={instanceName} onSaved={() => setShowSettings(false)} initialToken={gatewayToken} />
         </div>
       )}
 

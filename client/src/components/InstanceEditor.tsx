@@ -14,6 +14,7 @@ type MainTab = 'files' | 'openclaw';
 interface InstanceEditorProps {
   instanceName: string;
   deployType?: string;
+  gatewayToken?: string;
 }
 
 const FILE_LABELS: Record<YamlFileName, string> = {
@@ -27,9 +28,10 @@ const FILE_LABELS: Record<YamlFileName, string> = {
 // Files that have form support
 const FORM_SUPPORTED: YamlFileName[] = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml'];
 
-export default function InstanceEditor({ instanceName, deployType }: InstanceEditorProps) {
+export default function InstanceEditor({ instanceName, deployType, gatewayToken }: InstanceEditorProps) {
   const isLocal = deployType === 'local';
   const [mainTab, setMainTab] = useState<MainTab>(isLocal ? 'openclaw' : 'files');
+  const [deploySucceeded, setDeploySucceeded] = useState(false);
   const [selectedFile, setSelectedFile] = useState<YamlFileName>('deployment.yaml');
   const [viewMode, setViewMode] = useState<ViewMode>('form');
   const [fileContents, setFileContents] = useState<Record<string, string>>({});
@@ -42,6 +44,9 @@ export default function InstanceEditor({ instanceName, deployType }: InstanceEdi
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [deployOutput, setDeployOutput] = useState<string[]>([]);
   const [deployStatus, setDeployStatus] = useState<'running' | 'success' | 'error'>('running');
+  const [podPhase, setPodPhase] = useState<string | null>(null);
+  const [podReady, setPodReady] = useState(false);
+  const [podName, setPodName] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadFiles = useCallback(async () => {
@@ -110,6 +115,10 @@ export default function InstanceEditor({ instanceName, deployType }: InstanceEdi
   const handleDeploy = async () => {
     setDeployOutput([]);
     setDeployStatus('running');
+    setPodPhase(null);
+    setPodReady(false);
+    setPodName(null);
+    setDeploySucceeded(false);
     setDeployModalOpen(true);
     setDeploying(true);
 
@@ -129,24 +138,33 @@ export default function InstanceEditor({ instanceName, deployType }: InstanceEdi
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let buffer = '';
+      let buf = '';
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() ?? '';
-
-        setDeployOutput(prev => [...prev, ...lines.filter(l => l.length > 0)]);
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const part of parts) {
+          const line = part.startsWith('data: ') ? part.slice(6) : part;
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line) as { type: string; text?: string; phase?: string; ready?: boolean; podName?: string; success?: boolean; message?: string };
+            if (msg.type === 'log' && msg.text) {
+              setDeployOutput(prev => [...prev, ...msg.text!.split('\n').filter(l => l.length > 0)]);
+            } else if (msg.type === 'pod_status') {
+              setPodPhase(msg.phase ?? null);
+              setPodReady(msg.ready ?? false);
+              if (msg.podName) setPodName(msg.podName);
+            } else if (msg.type === 'done') {
+              const ok = msg.success === true;
+              setDeployStatus(ok ? 'success' : 'error');
+              if (ok) setDeploySucceeded(true);
+            }
+          } catch { /* ignore */ }
+        }
       }
-
-      if (buffer) {
-        setDeployOutput(prev => [...prev, buffer]);
-      }
-
-      setDeployStatus('success');
     } catch (err) {
       setDeployOutput(prev => [...prev, `Error: ${String(err)}`]);
       setDeployStatus('error');
@@ -242,7 +260,13 @@ export default function InstanceEditor({ instanceName, deployType }: InstanceEdi
       {/* OpenClaw Connect Panel */}
       {mainTab === 'openclaw' && (
         <div className="flex-1 overflow-hidden">
-          <OpenClawPanel instanceName={instanceName} deployType={deployType} />
+          <OpenClawPanel
+            instanceName={instanceName}
+            deployType={deployType}
+            gatewayToken={gatewayToken}
+            autoOpenSettings={deploySucceeded}
+            onAutoOpenHandled={() => setDeploySucceeded(false)}
+          />
         </div>
       )}
 
@@ -395,8 +419,27 @@ export default function InstanceEditor({ instanceName, deployType }: InstanceEdi
               )}
             </div>
 
+            {/* Pod status */}
+            {podPhase && (
+              <div className="px-4 py-2 border-t border-gray-700 flex-shrink-0 flex items-center gap-3 bg-gray-850" style={{ background: '#1a1f2e' }}>
+                <div className={`w-2 h-2 rounded-full flex-shrink-0 ${podReady ? 'bg-green-400' : podPhase === 'Running' ? 'bg-yellow-400 animate-pulse' : 'bg-gray-500 animate-pulse'}`} />
+                <span className="text-xs text-gray-400">
+                  Pod: <span className={podReady ? 'text-green-400' : 'text-yellow-300'}>{podPhase}{podName ? ` (${podName})` : ''}</span>
+                  {podReady ? ' · Ready' : ' · Waiting...'}
+                </span>
+              </div>
+            )}
+
             {/* Footer */}
-            <div className="flex justify-end px-5 py-3 border-t border-gray-700 flex-shrink-0">
+            <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-700 flex-shrink-0">
+              {deployStatus === 'success' && (
+                <button
+                  onClick={() => { setDeployModalOpen(false); setMainTab('openclaw'); }}
+                  className="flex items-center gap-2 px-4 py-2 text-sm bg-green-600 hover:bg-green-500 text-white rounded-md transition-colors"
+                >
+                  <Wifi size={14} />Go to Connect
+                </button>
+              )}
               <button
                 onClick={() => setDeployModalOpen(false)}
                 disabled={deploying}

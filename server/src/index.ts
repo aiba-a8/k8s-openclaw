@@ -277,35 +277,79 @@ app.post('/api/instances/:name/deploy', (req: Request, res: Response) => {
     return res.status(404).json({ error: `Instance "${name}" not found.` });
   }
 
-  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-  res.setHeader('Transfer-Encoding', 'chunked');
-  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
 
-  const child = spawn('kubectl', ['apply', '-k', instanceDir], {
-    cwd: instanceDir,
-    env: process.env,
+  const send = (type: string, data: Record<string, unknown>) => {
+    res.write(`data: ${JSON.stringify({ type, ...data })}\n\n`);
+  };
+
+  let pollTimer: NodeJS.Timeout | null = null;
+  const cleanup = () => { if (pollTimer) clearInterval(pollTimer); };
+  req.on('close', cleanup);
+
+  // Step 1: kubectl apply -k
+  const apply = spawn('kubectl', ['apply', '-k', instanceDir], { cwd: instanceDir, env: process.env });
+
+  apply.stdout.on('data', (d: Buffer) => send('log', { text: d.toString() }));
+  apply.stderr.on('data', (d: Buffer) => send('log', { text: d.toString() }));
+
+  apply.on('error', (err: Error) => {
+    send('log', { text: `\nError: ${err.message}\n` });
+    send('done', { success: false });
+    res.end();
   });
 
-  child.stdout.on('data', (data: Buffer) => {
-    res.write(data.toString());
-  });
-
-  child.stderr.on('data', (data: Buffer) => {
-    res.write(data.toString());
-  });
-
-  child.on('close', (code: number | null) => {
-    if (code === 0) {
-      res.write('\n✓ Deploy completed successfully.\n');
-    } else {
-      res.write(`\n✗ Deploy failed with exit code ${code}.\n`);
+  apply.on('close', (code: number | null) => {
+    if (code !== 0) {
+      send('log', { text: `\n✗ kubectl apply failed (exit code ${code}).\n` });
+      send('done', { success: false });
+      res.end();
+      return;
     }
-    res.end();
-  });
 
-  child.on('error', (err: Error) => {
-    res.write(`\nError: ${err.message}\n`);
-    res.end();
+    send('log', { text: '\n✓ kubectl apply completed. Watching pod status...\n' });
+
+    // Step 2: poll pod status every 3s, up to 2 min
+    let attempts = 0;
+    const maxAttempts = 40;
+
+    pollTimer = setInterval(() => {
+      attempts++;
+      const check = spawn('kubectl', ['get', 'pods', '-l', `app=${name}`, '-o', 'json'], { env: process.env });
+      let out = '';
+      check.stdout.on('data', (d: Buffer) => { out += d.toString(); });
+      check.on('close', () => {
+        try {
+          const result = JSON.parse(out) as { items: Array<{ metadata: { name: string }; status: { phase: string; conditions?: Array<{ type: string; status: string }> } }> };
+          const pod = result.items?.[0];
+          if (!pod) {
+            send('pod_status', { phase: 'Pending', ready: false, message: 'Waiting for pod to be created...' });
+            return;
+          }
+          const phase = pod.status?.phase ?? 'Unknown';
+          const ready = pod.status?.conditions?.some(c => c.type === 'Ready' && c.status === 'True') ?? false;
+          const podName = pod.metadata?.name ?? '';
+          send('pod_status', { phase, ready, podName });
+
+          if (ready || attempts >= maxAttempts) {
+            cleanup();
+            if (ready) {
+              send('log', { text: `\n✓ Pod ${podName} is Running and Ready.\n` });
+              send('done', { success: true });
+            } else {
+              send('log', { text: '\n✗ Timed out waiting for pod to become ready.\n' });
+              send('done', { success: false });
+            }
+            res.end();
+          }
+        } catch {
+          // kubectl output not ready yet, ignore
+        }
+      });
+    }, 3000);
   });
 });
 
