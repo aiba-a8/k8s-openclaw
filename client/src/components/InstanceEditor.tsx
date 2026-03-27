@@ -124,8 +124,8 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
   const [podName, setPodName] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const loadFiles = useCallback(async () => {
-    setLoading(true);
+  const loadFiles = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     setLoadError(null);
     const contents: Record<string, string> = {};
     try {
@@ -141,15 +141,18 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
       setFileContents(contents);
       setPendingContents(contents);
     } catch (err) {
-      setLoadError(String(err));
+      if (!silent) setLoadError(String(err));
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [instanceName]);
 
   useEffect(() => {
     void loadFiles();
   }, [loadFiles]);
+
+  // Silent refresh for onSync — does not blank the editor
+  const handleSyncFiles = useCallback(() => { void loadFiles(true); }, [loadFiles]);
 
   const handleContentChange = (newContent: string) => {
     setPendingContents(prev => ({ ...prev, [selectedFile]: newContent }));
@@ -369,7 +372,7 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
       {/* Config Panel */}
       {mainTab === 'config' && (
         <div className="flex-1 overflow-hidden">
-          <OcFileConfigPanel instanceName={instanceName} deployType={deployType} onSync={() => void loadFiles()} />
+          <OcFileConfigPanel instanceName={instanceName} deployType={deployType} onSync={handleSyncFiles} />
         </div>
       )}
 

@@ -48,6 +48,7 @@ interface ProviderEntry {
   key: string;
   baseUrl?: string;
   apiKey?: string;
+  api?: string;
   models?: ModelEntry[];
 }
 
@@ -430,13 +431,14 @@ function BindingsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
 function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) => void }) {
   const [expandedProvider, setExpandedProvider] = useState<number | null>(null);
 
-  type RawProvider = { baseUrl?: string; apiKey?: string; models?: ModelEntry[] };
+  type RawProvider = { baseUrl?: string; apiKey?: string; api?: string; models?: ModelEntry[] };
   const cfg = JSON.parse(raw) as { models?: { providers?: Record<string, RawProvider> } };
 
   const providers: ProviderEntry[] = Object.entries(cfg.models?.providers ?? {}).map(([key, v]) => ({
     key,
     baseUrl: v.baseUrl ?? '',
     apiKey: typeof v.apiKey === 'string' ? v.apiKey : '',
+    api: v.api ?? '',
     models: Array.isArray(v.models) ? v.models : [],
   }));
 
@@ -450,13 +452,14 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
         ...(existing[p.key] ?? {}),
         ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
         ...(p.apiKey ? { apiKey: p.apiKey } : {}),
+        ...(p.api ? { api: p.api } : {}),
         models: p.models ?? [],
       };
     }
     m.providers = result;
   }));
 
-  const setProviderField = (i: number, field: 'key' | 'baseUrl' | 'apiKey', val: string) =>
+  const setProviderField = (i: number, field: 'key' | 'baseUrl' | 'apiKey' | 'api', val: string) =>
     writeProviders(providers.map((p, idx) => idx === i ? { ...p, [field]: val } : p));
 
   const setModels = (i: number, models: ModelEntry[]) =>
@@ -504,6 +507,25 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                   <div>
                     <label className="text-[10px] text-gray-500 mb-0.5 block">Base URL</label>
                     <input value={p.baseUrl ?? ''} onChange={e => setProviderField(pi, 'baseUrl', e.target.value)} className={INPUT} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-gray-500 mb-0.5 block">API</label>
+                    <input
+                      list={`provider-api-opts-${pi}`}
+                      value={p.api ?? ''}
+                      onChange={e => setProviderField(pi, 'api', e.target.value)}
+                      placeholder="openai-completions"
+                      className={INPUT}
+                    />
+                    <datalist id={`provider-api-opts-${pi}`}>
+                      <option value="openai-completions" />
+                      <option value="openai-responses" />
+                      <option value="openai-codex-responses" />
+                      <option value="anthropic-messages" />
+                      <option value="google-gemini" />
+                      <option value="google-generative-ai" />
+                      <option value="ollama" />
+                    </datalist>
                   </div>
                   <div>
                     <label className="text-[10px] text-gray-500 mb-0.5 block">API Key</label>
@@ -637,7 +659,7 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
         );
       })}
       <button
-        onClick={() => { writeProviders([...providers, { key: 'anthropic', baseUrl: '', apiKey: '', models: [] }]); setExpandedProvider(providers.length); }}
+        onClick={() => { writeProviders([...providers, { key: 'anthropic', baseUrl: '', apiKey: '', api: 'openai-completions', models: [] }]); setExpandedProvider(providers.length); }}
         className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-1"
       >
         <Plus size={12} />Add Provider

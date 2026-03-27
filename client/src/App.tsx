@@ -15,7 +15,9 @@ export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [instances, setInstances] = useState<Instance[]>([]);
-  const [selectedInstance, setSelectedInstance] = useState<string | null>(null);
+  const [selectedInstance, setSelectedInstance] = useState<string | null>(
+    () => localStorage.getItem('k8s_openclaw_selected'),
+  );
   const [terminalOpen, setTerminalOpen] = useState(true);
   const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
   const [deployingInstance, setDeployingInstance] = useState<string | null>(null);
@@ -73,6 +75,14 @@ export default function App() {
       if (!res.ok) throw new Error('Failed to fetch instances');
       const data = await res.json() as Instance[];
       setInstances(data);
+      // Clear persisted selection if the instance no longer exists
+      setSelectedInstance(prev => {
+        if (prev && !data.find(i => i.name === prev)) {
+          localStorage.removeItem('k8s_openclaw_selected');
+          return null;
+        }
+        return prev;
+      });
     } catch (err) {
       setError(String(err));
     } finally {
@@ -83,6 +93,15 @@ export default function App() {
   useEffect(() => {
     if (authenticated) void fetchInstances();
   }, [authenticated, fetchInstances]);
+
+  // Persist selected instance across page reloads / Vite HMR
+  useEffect(() => {
+    if (selectedInstance) {
+      localStorage.setItem('k8s_openclaw_selected', selectedInstance);
+    } else {
+      localStorage.removeItem('k8s_openclaw_selected');
+    }
+  }, [selectedInstance]);
 
   const handleLogin = () => {
     setAuthenticated(true);
