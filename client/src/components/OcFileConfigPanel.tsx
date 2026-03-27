@@ -448,17 +448,12 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
     const existing = (m.providers ?? {}) as Record<string, RawProvider>;
     const result: Record<string, unknown> = {};
     for (const p of next) {
-      const models = (p.models ?? []).map((m, mi) => {
-        const id = m.id.trim() || `model-${mi + 1}`;
-        const name = m.name.trim() || id;
-        return { ...m, id, name };
-      });
       result[p.key] = {
         ...(existing[p.key] ?? {}),
         ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
         ...(p.apiKey ? { apiKey: p.apiKey } : {}),
         ...(p.api ? { api: p.api } : {}),
-        models,
+        models: p.models ?? [],
       };
     }
     m.providers = result;
@@ -488,17 +483,22 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
         return (
           <div key={pi} className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
             {/* Provider header */}
-            <div className="flex items-center gap-2 px-3 py-2">
+            <div
+              className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-750 select-none"
+              onClick={() => setExpandedProvider(isOpen ? null : pi)}
+            >
               <Cpu size={12} className="text-cyan-400 flex-shrink-0" />
               <span className="text-xs font-semibold text-gray-200 flex-1">{p.key || `Provider ${pi + 1}`}</span>
               <span className="text-xs text-gray-500">{models.length} model{models.length !== 1 ? 's' : ''}</span>
               <button
-                onClick={() => setExpandedProvider(isOpen ? null : pi)}
+                onClick={e => { e.stopPropagation(); setExpandedProvider(isOpen ? null : pi); }}
                 className="text-gray-400 hover:text-gray-200 transition-colors ml-1"
               >
                 <ChevronDown size={13} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
               </button>
-              <ConfirmButton onConfirm={() => writeProviders(providers.filter((_, idx) => idx !== pi))} label="Delete provider" className="text-gray-600 hover:text-red-400" />
+              <span onClick={e => e.stopPropagation()}>
+                <ConfirmButton onConfirm={() => writeProviders(providers.filter((_, idx) => idx !== pi))} label="Delete provider" className="text-gray-600 hover:text-red-400" />
+              </span>
             </div>
 
             {isOpen && (
@@ -557,18 +557,18 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                       </div>
                       <div className="grid grid-cols-2 gap-1.5">
                         <div>
-                          <label className="text-[10px] text-gray-600 mb-0.5 block">ID *</label>
-                          <input value={m.id} onChange={e => setModelField(pi, mi, 'id', e.target.value)}
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">ID <span className="text-red-400">*</span></label>
+                          <input required value={m.id} onChange={e => setModelField(pi, mi, 'id', e.target.value)}
                             placeholder="gpt-4o" className={INPUT} />
                         </div>
                         <div>
-                          <label className="text-[10px] text-gray-600 mb-0.5 block">Name *</label>
-                          <input value={m.name} onChange={e => setModelField(pi, mi, 'name', e.target.value)}
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">Name <span className="text-red-400">*</span></label>
+                          <input required value={m.name} onChange={e => setModelField(pi, mi, 'name', e.target.value)}
                             placeholder="GPT-4o" className={INPUT} />
                         </div>
                         <div className="col-span-2">
-                          <label className="text-[10px] text-gray-600 mb-0.5 block">API</label>
-                          <select value={m.api ?? ''} onChange={e => setModelField(pi, mi, 'api', e.target.value)} className={INPUT}>
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">API <span className="text-red-400">*</span></label>
+                          <select required value={m.api ?? ''} onChange={e => setModelField(pi, mi, 'api', e.target.value)} className={INPUT}>
                             <option value="">-- select --</option>
                             <option value="openai-completions">openai-completions</option>
                             <option value="openai-responses">openai-responses</option>
@@ -580,20 +580,20 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                           </select>
                         </div>
                         <div>
-                          <label className="text-[10px] text-gray-600 mb-0.5 block">Context Window</label>
-                          <input type="number" value={m.contextWindow ?? ''} onChange={e => setModelField(pi, mi, 'contextWindow', Number(e.target.value))}
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">Context Window <span className="text-red-400">*</span></label>
+                          <input required type="number" value={m.contextWindow ?? ''} onChange={e => setModelField(pi, mi, 'contextWindow', Number(e.target.value))}
                             placeholder="128000" className={INPUT} />
                         </div>
                         <div>
-                          <label className="text-[10px] text-gray-600 mb-0.5 block">Max Tokens</label>
-                          <input type="number" value={m.maxTokens ?? ''} onChange={e => setModelField(pi, mi, 'maxTokens', Number(e.target.value))}
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">Max Tokens <span className="text-red-400">*</span></label>
+                          <input required type="number" value={m.maxTokens ?? ''} onChange={e => setModelField(pi, mi, 'maxTokens', Number(e.target.value))}
                             placeholder="8096" className={INPUT} />
                         </div>
                       </div>
 
                       {/* Input modalities */}
                       <div>
-                        <label className="text-[10px] text-gray-600 mb-1 block">Input Modalities</label>
+                        <label className="text-[10px] text-gray-600 mb-1 block">Input Modalities <span className="text-red-400">*</span></label>
                         <div className="flex gap-1.5 flex-wrap">
                           {(['text', 'image', 'audio', 'video'] as const).map(mod => {
                             const active = (m.input ?? []).includes(mod);
@@ -616,12 +616,13 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
 
                       {/* Cost (per 1M tokens) */}
                       <div>
-                        <label className="text-[10px] text-gray-600 mb-1 block">Cost (per 1M tokens, USD)</label>
+                        <label className="text-[10px] text-gray-600 mb-1 block">Cost (per 1M tokens, USD) <span className="text-red-400">*</span></label>
                         <div className="grid grid-cols-4 gap-1">
                           {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map(k => (
                             <div key={k}>
                               <label className="text-[10px] text-gray-700 mb-0.5 block capitalize">{k === 'cacheRead' ? 'Cache R' : k === 'cacheWrite' ? 'Cache W' : k}</label>
                               <input
+                                required
                                 type="number"
                                 step="0.01"
                                 value={m.cost?.[k] ?? 0}
@@ -641,7 +642,7 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                         <input type="checkbox" checked={m.reasoning ?? false}
                           onChange={e => setModelField(pi, mi, 'reasoning', e.target.checked)}
                           className="accent-purple-500" />
-                        <span className="text-[10px] text-gray-400">Reasoning model</span>
+                        <span className="text-[10px] text-gray-400">Reasoning model <span className="text-red-400">*</span></span>
                       </label>
                     </div>
                   ))}
