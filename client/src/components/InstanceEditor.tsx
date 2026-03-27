@@ -332,7 +332,7 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
             </button>
           </div>
         </div>
-        {!isLocal && (
+        {!isLocal && mainTab === 'files' && (
           <button
             onClick={() => void handleDeploy()}
             disabled={deploying}

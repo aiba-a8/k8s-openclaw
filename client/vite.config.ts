@@ -4,9 +4,10 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   build: {
-    // Exclude Monaco from the bundle — load it from CDN at runtime
     rollupOptions: {
-      external: ['monaco-editor'],
+      output: {
+        manualChunks: { 'monaco-editor': ['monaco-editor'] },
+      },
     },
   },
   server: {

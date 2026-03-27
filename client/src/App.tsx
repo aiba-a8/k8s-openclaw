@@ -19,7 +19,7 @@ export default function App() {
     () => localStorage.getItem('k8s_openclaw_selected'),
   );
   const [terminalOpen, setTerminalOpen] = useState(true);
-  const [bottomTab, setBottomTab] = useState<BottomTab>('terminal');
+  const [bottomTab, setBottomTab] = useState<BottomTab>('logs');
   const [deployingInstance, setDeployingInstance] = useState<string | null>(null);
   const [bottomHeight, setBottomHeight] = useState(288); // px, default h-72
   const isDragging = React.useRef(false);

@@ -691,6 +691,9 @@ const CHANNEL_FIELD_META: Record<string, FieldMeta> = {
   secret:       { type: 'password', label: 'Secret' },
   clientSecret: { type: 'password', label: 'Client Secret' },
   webhookSecret:{ type: 'password', label: 'Webhook Secret' },
+  appId:        { type: 'string',   label: 'App ID' },
+  appSecret:    { type: 'password', label: 'App Secret' },
+  botName:      { type: 'string',   label: 'Bot Name' },
   allowFrom:    { type: 'array',   label: 'Allow From' },
   denyFrom:     { type: 'array',   label: 'Deny From' },
   allowGroups:  { type: 'array',   label: 'Allow Groups' },
@@ -792,7 +795,7 @@ function ChannelFieldEditor({
             <input
               value={newItem}
               onChange={e => setNewItem(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && addItem()}
+              onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && addItem()}
               placeholder="add item…"
               className={`${INPUT_CLS} flex-1 placeholder-gray-600`}
             />
@@ -808,6 +811,157 @@ function ChannelFieldEditor({
     <div>
       <label className="text-[10px] text-gray-500 mb-0.5 block">{label}</label>
       <input value={String(value ?? '')} onChange={e => onChange(e.target.value)} className={INPUT_CLS} />
+    </div>
+  );
+}
+
+// ── Per-account card (inside AccountsEditor) ──────────────────────────────────
+function AccountCard({
+  accountKey, value, onUpdate, onRename, onDelete,
+}: {
+  accountKey: string;
+  value: Record<string, unknown>;
+  onUpdate: (v: Record<string, unknown>) => void;
+  onRename: (oldKey: string, newKey: string) => void;
+  onDelete: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [renameVal, setRenameVal] = useState<string | null>(null);
+
+  const setField = (k: string, v: unknown) => onUpdate({ ...value, [k]: v });
+  const removeField = (k: string) => { const n = { ...value }; delete n[k]; onUpdate(n); };
+
+  const commitRename = () => {
+    const nk = (renameVal ?? '').trim();
+    if (nk && nk !== accountKey) onRename(accountKey, nk);
+    setRenameVal(null);
+  };
+
+  const fieldKeys = Object.keys(value);
+  const boolKeys = fieldKeys.filter(k => typeof value[k] === 'boolean');
+  const otherKeys = fieldKeys.filter(k => typeof value[k] !== 'boolean');
+
+  return (
+    <div className="bg-gray-900 border border-gray-700 rounded overflow-hidden">
+      <div
+        className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-gray-800/60 select-none"
+        onClick={() => setOpen(o => !o)}
+      >
+        <Bot size={11} className="text-blue-400 flex-shrink-0" />
+        {renameVal !== null ? (
+          <input
+            autoFocus
+            value={renameVal}
+            onChange={e => setRenameVal(e.target.value)}
+            onBlur={commitRename}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitRename(); if (e.key === 'Escape') setRenameVal(null); }}
+            onClick={e => e.stopPropagation()}
+            className="flex-1 bg-gray-800 border border-blue-500 rounded px-1.5 py-0.5 text-xs text-gray-100 font-mono focus:outline-none"
+          />
+        ) : (
+          <span
+            className="flex-1 text-xs text-gray-300 font-mono hover:text-blue-300"
+            onDoubleClick={e => { e.stopPropagation(); setRenameVal(accountKey); }}
+            title="Double-click to rename"
+          >
+            {accountKey}
+          </span>
+        )}
+        <span className="text-[10px] text-gray-600">{fieldKeys.length}f</span>
+        <ChevronDown size={11} className={`text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <span onClick={e => e.stopPropagation()}>
+          <ConfirmButton onConfirm={onDelete} label={`Delete account ${accountKey}`} />
+        </span>
+      </div>
+
+      {open && (
+        <div className="border-t border-gray-700 p-2 space-y-2">
+          {boolKeys.length > 0 && (
+            <div className="flex flex-wrap gap-3">
+              {boolKeys.map(k => (
+                <div key={k} className="flex items-center gap-1">
+                  <ChannelFieldEditor fieldKey={k} value={value[k]} onChange={v => setField(k, v)} />
+                  <button onClick={() => removeField(k)} className="text-gray-700 hover:text-red-400"><Plus size={10} className="rotate-45" /></button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid grid-cols-2 gap-2">
+            {otherKeys.map(k => (
+              <div key={k} className="flex items-start gap-1">
+                <div className="flex-1 min-w-0">
+                  <ChannelFieldEditor fieldKey={k} value={value[k]} onChange={v => setField(k, v)} />
+                </div>
+                <button onClick={() => removeField(k)} className="text-gray-700 hover:text-red-400 mt-4 flex-shrink-0"><Plus size={10} className="rotate-45" /></button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Accounts editor (nested Record inside a channel) ───────────────────────────
+function AccountsEditor({
+  accounts, onChange,
+}: {
+  accounts: Record<string, Record<string, unknown>>;
+  onChange: (v: Record<string, Record<string, unknown>>) => void;
+}) {
+  const [newKey, setNewKey] = useState('');
+  const keys = Object.keys(accounts);
+
+  const addAccount = () => {
+    const k = newKey.trim();
+    if (!k || k in accounts) return;
+    onChange({ ...accounts, [k]: { appId: '', appSecret: '', allowFrom: ['*'], botName: '' } });
+    setNewKey('');
+  };
+
+  const updateAccount = (key: string, val: Record<string, unknown>) =>
+    onChange({ ...accounts, [key]: val });
+
+  const renameAccount = (oldKey: string, nk: string) => {
+    if (!nk || nk === oldKey || nk in accounts) return;
+    const next: Record<string, Record<string, unknown>> = {};
+    for (const k of keys) next[k === oldKey ? nk : k] = accounts[k];
+    onChange(next);
+  };
+
+  const deleteAccount = (key: string) => {
+    const next = { ...accounts };
+    delete next[key];
+    onChange(next);
+  };
+
+  return (
+    <div className="col-span-2 space-y-1.5">
+      <label className="text-[10px] text-gray-500 block">Accounts</label>
+      <div className="space-y-1">
+        {keys.map(k => (
+          <AccountCard
+            key={k}
+            accountKey={k}
+            value={accounts[k] ?? {}}
+            onUpdate={val => updateAccount(k, val)}
+            onRename={renameAccount}
+            onDelete={() => deleteAccount(k)}
+          />
+        ))}
+      </div>
+      <div className="flex items-center gap-1 pt-1">
+        <input
+          value={newKey}
+          onChange={e => setNewKey(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && addAccount()}
+          placeholder="account key…"
+          className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+        />
+        <button onClick={addAccount} disabled={!newKey.trim()} className="flex items-center gap-0.5 text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40 whitespace-nowrap">
+          <Plus size={11} />Add account
+        </button>
+      </div>
     </div>
   );
 }
@@ -843,14 +997,19 @@ function ChannelCard({
   };
 
   const fieldKeys = Object.keys(value);
-  // Booleans first, then rest
+  // Booleans first, then rest; nested objects (e.g. accounts) rendered separately
+  const isNestedObj = (v: unknown) => v !== null && typeof v === 'object' && !Array.isArray(v);
   const boolKeys = fieldKeys.filter(k => typeof value[k] === 'boolean');
-  const otherKeys = fieldKeys.filter(k => typeof value[k] !== 'boolean');
+  const nestedObjKeys = fieldKeys.filter(k => isNestedObj(value[k]));
+  const otherKeys = fieldKeys.filter(k => typeof value[k] !== 'boolean' && !isNestedObj(value[k]));
 
   return (
     <div className="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2">
+      {/* Header — full row is clickable to toggle */}
+      <div
+        className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-gray-750 select-none"
+        onClick={() => setOpen(o => !o)}
+      >
         <Radio size={12} className="text-purple-400 flex-shrink-0" />
         {renameVal !== null ? (
           <input
@@ -858,23 +1017,24 @@ function ChannelCard({
             value={renameVal}
             onChange={e => setRenameVal(e.target.value)}
             onBlur={commitRename}
-            onKeyDown={e => { if (e.key === 'Enter') commitRename(); if (e.key === 'Escape') setRenameVal(null); }}
+            onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) commitRename(); if (e.key === 'Escape') setRenameVal(null); }}
+            onClick={e => e.stopPropagation()}
             className="flex-1 bg-gray-900 border border-blue-500 rounded px-2 py-0.5 text-xs text-gray-100 font-mono focus:outline-none"
           />
         ) : (
-          <button
-            onClick={() => setRenameVal(channelKey)}
-            className="flex-1 text-left text-xs text-gray-200 font-mono capitalize hover:text-blue-300"
-            title="Click to rename"
+          <span
+            className="flex-1 text-xs text-gray-200 font-mono capitalize hover:text-blue-300"
+            onDoubleClick={e => { e.stopPropagation(); setRenameVal(channelKey); }}
+            title="Double-click to rename"
           >
             {channelKey}
-          </button>
+          </span>
         )}
         <span className="text-[10px] text-gray-600">{fieldKeys.length} field{fieldKeys.length !== 1 ? 's' : ''}</span>
-        <button onClick={() => setOpen(o => !o)} className="text-gray-400 hover:text-gray-200">
-          <ChevronDown size={13} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
-        </button>
-        <ConfirmButton onConfirm={onDelete} label={`Delete ${channelKey} channel`} />
+        <ChevronDown size={13} className={`text-gray-400 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <span onClick={e => e.stopPropagation()}>
+          <ConfirmButton onConfirm={onDelete} label={`Delete ${channelKey} channel`} />
+        </span>
       </div>
 
       {open && (
@@ -891,7 +1051,7 @@ function ChannelCard({
             </div>
           )}
 
-          {/* Other fields grid */}
+          {/* Other (scalar/array) fields grid */}
           <div className="grid grid-cols-2 gap-2">
             {otherKeys.map(k => (
               <div key={k} className="flex items-start gap-1">
@@ -903,12 +1063,22 @@ function ChannelCard({
             ))}
           </div>
 
+          {/* Nested object fields (e.g. accounts) */}
+          {nestedObjKeys.map(k => (
+            <div key={k} className="border-t border-gray-700 pt-2">
+              <AccountsEditor
+                accounts={value[k] as Record<string, Record<string, unknown>>}
+                onChange={v => setField(k, v)}
+              />
+            </div>
+          ))}
+
           {/* Add field */}
           <div className="flex items-center gap-1 border-t border-gray-700 pt-2">
             <input
               value={newFieldKey}
               onChange={e => setNewFieldKey(e.target.value)}
-              onKeyDown={e => e.key === 'Enter' && addField()}
+              onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && addField()}
               placeholder="add field…"
               className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
             />
@@ -922,10 +1092,188 @@ function ChannelCard({
   );
 }
 
+// ── Default drafts for known channel types ─────────────────────────────────────
+const CHANNEL_DEFAULTS: Record<string, Record<string, unknown>> = {
+  feishu: {
+    enabled: true,
+    dmPolicy: 'open',
+    accounts: {
+      default: { appId: '', appSecret: '', allowFrom: ['*'], botName: '' },
+    },
+  },
+  slack:          { enabled: true, botToken: '', dmPolicy: 'open' },
+  discord:        { enabled: true, botToken: '', dmPolicy: 'open' },
+  telegram:       { enabled: true, botToken: '', dmPolicy: 'open' },
+  whatsapp:       { enabled: true, apiKey: '', dmPolicy: 'open' },
+  wechat:         { enabled: true, appId: '', appSecret: '', dmPolicy: 'open' },
+  'synology-chat':{ enabled: true, token: '', dmPolicy: 'open' },
+  'nextcloud-talk':{ enabled: true, token: '', dmPolicy: 'open' },
+  line:           { enabled: true, botToken: '', dmPolicy: 'open' },
+};
+
+// ── Add Channel Modal ──────────────────────────────────────────────────────────
+function AddChannelModal({
+  existingKeys, unusedKnown, onAdd, onClose,
+}: {
+  existingKeys: string[];
+  unusedKnown: string[];
+  onAdd: (key: string, value: Record<string, unknown>) => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState(unusedKnown[0] ?? '');
+  const [customName, setCustomName] = useState(unusedKnown.length === 0);
+  const [draft, setDraft] = useState<Record<string, unknown>>(() =>
+    CHANNEL_DEFAULTS[unusedKnown[0] ?? ''] ?? { enabled: true }
+  );
+  const [newFieldKey, setNewFieldKey] = useState('');
+
+  const selectChannel = (n: string) => {
+    setName(n);
+    setDraft(CHANNEL_DEFAULTS[n] ? { ...CHANNEL_DEFAULTS[n] } : { enabled: true });
+  };
+
+  const setField = (k: string, v: unknown) => setDraft(d => ({ ...d, [k]: v }));
+  const removeField = (k: string) => setDraft(d => { const n = { ...d }; delete n[k]; return n; });
+
+  const addField = () => {
+    const k = newFieldKey.trim();
+    if (!k || k in draft) return;
+    setDraft(d => ({ ...d, [k]: '' }));
+    setNewFieldKey('');
+  };
+
+  const handleAdd = () => {
+    const n = name.trim();
+    if (!n || existingKeys.includes(n)) return;
+    onAdd(n, draft);
+    onClose();
+  };
+
+  const fieldKeys = Object.keys(draft);
+  const isNestedObj = (v: unknown) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const boolKeys = fieldKeys.filter(k => typeof draft[k] === 'boolean');
+  const nestedObjKeys = fieldKeys.filter(k => isNestedObj(draft[k]));
+  const otherKeys = fieldKeys.filter(k => typeof draft[k] !== 'boolean' && !isNestedObj(draft[k]));
+  const nameConflict = existingKeys.includes(name.trim());
+
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-6" onClick={onClose}>
+      <div
+        className="bg-gray-800 border border-gray-700 rounded-xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl"
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-700">
+          <Radio size={16} className="text-purple-400" />
+          <h3 className="text-base font-semibold text-gray-100">Add Channel</h3>
+          <button onClick={onClose} className="ml-auto text-gray-500 hover:text-gray-300 p-1 rounded hover:bg-gray-700"><Plus size={16} className="rotate-45" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          {/* Channel name */}
+          <div>
+            <label className="text-xs text-gray-400 mb-1.5 block font-medium">Channel Type / Name</label>
+            {!customName && unusedKnown.length > 0 ? (
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <select
+                    value={name}
+                    onChange={e => selectChannel(e.target.value)}
+                    className="w-full appearance-none bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:border-purple-500 pr-8"
+                  >
+                    {unusedKnown.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <ChevronDown size={13} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                </div>
+                <button onClick={() => { setCustomName(true); setName(''); setDraft({ enabled: true }); }} className="text-xs text-gray-500 hover:text-gray-300 whitespace-nowrap px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg hover:border-gray-500">
+                  Custom…
+                </button>
+              </div>
+            ) : (
+              <input
+                autoFocus
+                value={name}
+                onChange={e => { setName(e.target.value); setDraft(CHANNEL_DEFAULTS[e.target.value] ?? { enabled: true }); }}
+                placeholder="channel name"
+                className={`w-full bg-gray-900 border rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none font-mono ${nameConflict ? 'border-red-500 focus:border-red-500' : 'border-gray-700 focus:border-purple-500'}`}
+              />
+            )}
+            {nameConflict && <p className="text-xs text-red-400 mt-1">Channel "{name}" already exists</p>}
+          </div>
+
+          {/* Boolean toggles */}
+          {boolKeys.length > 0 && (
+            <div className="flex flex-wrap gap-5">
+              {boolKeys.map(k => (
+                <div key={k} className="flex items-center gap-1.5">
+                  <ChannelFieldEditor fieldKey={k} value={draft[k]} onChange={v => setField(k, v)} />
+                  <button onClick={() => removeField(k)} className="text-gray-600 hover:text-red-400"><Plus size={11} className="rotate-45" /></button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Scalar / array fields */}
+          {otherKeys.length > 0 && (
+            <div className="grid grid-cols-2 gap-3">
+              {otherKeys.map(k => (
+                <div key={k} className="flex items-start gap-1.5">
+                  <div className="flex-1 min-w-0">
+                    <ChannelFieldEditor fieldKey={k} value={draft[k]} onChange={v => setField(k, v)} />
+                  </div>
+                  <button onClick={() => removeField(k)} className="text-gray-600 hover:text-red-400 mt-5 flex-shrink-0"><Plus size={11} className="rotate-45" /></button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Nested object fields (accounts, etc.) */}
+          {nestedObjKeys.map(k => (
+            <div key={k} className="border-t border-gray-700 pt-4">
+              <AccountsEditor
+                accounts={draft[k] as Record<string, Record<string, unknown>>}
+                onChange={v => setField(k, v)}
+              />
+            </div>
+          ))}
+
+          {/* Add field */}
+          <div className="flex items-center gap-2 border-t border-gray-700 pt-4">
+            <input
+              value={newFieldKey}
+              onChange={e => setNewFieldKey(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && !e.nativeEvent.isComposing && addField()}
+              placeholder="add field…"
+              className="flex-1 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+            />
+            <button onClick={addField} disabled={!newFieldKey.trim()} className="flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300 disabled:opacity-40 whitespace-nowrap px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg hover:border-blue-500 disabled:cursor-not-allowed">
+              <Plus size={13} />Add field
+            </button>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-700">
+          <button onClick={onClose} className="px-4 py-2 text-sm bg-gray-700 hover:bg-gray-600 text-gray-200 rounded-lg transition-colors">
+            Cancel
+          </button>
+          <button
+            onClick={handleAdd}
+            disabled={!name.trim() || nameConflict}
+            className="px-4 py-2 text-sm bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+          >
+            Add Channel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Channels form ─────────────────────────────────────────────────────────────
 function ChannelsForm({ raw, onChange }: { raw: string; onChange: (r: string) => void }) {
-  const [newName, setNewName] = useState('');
-  const [customNew, setCustomNew] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  // legacy state removed — add is now modal-driven
 
   const cfg = JSON.parse(raw) as { channels?: Record<string, unknown> };
   const channels = cfg.channels ?? {};
@@ -934,12 +1282,8 @@ function ChannelsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
   const writeChannels = (next: Record<string, unknown>) =>
     onChange(patchJson(raw, c => { c.channels = next; }));
 
-  const addChannel = () => {
-    const name = newName.trim();
-    if (!name || keys.includes(name)) return;
-    writeChannels({ ...channels, [name]: { enabled: true } });
-    setNewName('');
-    setCustomNew(false);
+  const addChannel = (name: string, value: Record<string, unknown>) => {
+    writeChannels({ ...channels, [name]: value });
   };
 
   const deleteChannel = (key: string) => {
@@ -975,41 +1319,24 @@ function ChannelsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
         />
       ))}
 
-      {/* Add channel */}
-      <div className="flex items-center gap-2 mt-2">
-        {!customNew && unusedKnown.length > 0 ? (
-          <>
-            <div className="relative flex-1">
-              <select
-                value={newName}
-                onChange={e => setNewName(e.target.value)}
-                className="w-full appearance-none bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 pr-5"
-              >
-                <option value="">Select channel…</option>
-                {unusedKnown.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
-            </div>
-            <button onClick={() => setCustomNew(true)} className="text-[10px] text-gray-500 hover:text-gray-300 whitespace-nowrap">custom</button>
-          </>
-        ) : (
-          <input
-            autoFocus={customNew}
-            value={newName}
-            onChange={e => setNewName(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && addChannel()}
-            placeholder="channel name"
-            className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
-          />
-        )}
+      {/* Add channel button */}
+      <div className="flex justify-end mt-2">
         <button
-          onClick={addChannel}
-          disabled={!newName.trim() || keys.includes(newName.trim())}
-          className="flex items-center gap-0.5 text-xs text-blue-400 hover:text-blue-300 disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+          onClick={() => setModalOpen(true)}
+          className="flex items-center gap-1 text-xs text-purple-400 hover:text-purple-300 transition-colors"
         >
-          <Plus size={12} />Add
+          <Plus size={12} />Add Channel
         </button>
       </div>
+
+      {modalOpen && (
+        <AddChannelModal
+          existingKeys={keys}
+          unusedKnown={unusedKnown}
+          onAdd={addChannel}
+          onClose={() => setModalOpen(false)}
+        />
+      )}
     </div>
   );
 }
