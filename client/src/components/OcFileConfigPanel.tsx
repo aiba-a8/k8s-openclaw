@@ -448,12 +448,17 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
     const existing = (m.providers ?? {}) as Record<string, RawProvider>;
     const result: Record<string, unknown> = {};
     for (const p of next) {
+      const models = (p.models ?? []).map((m, mi) => {
+        const id = m.id.trim() || `model-${mi + 1}`;
+        const name = m.name.trim() || id;
+        return { ...m, id, name };
+      });
       result[p.key] = {
         ...(existing[p.key] ?? {}),
         ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}),
         ...(p.apiKey ? { apiKey: p.apiKey } : {}),
         ...(p.api ? { api: p.api } : {}),
-        models: p.models ?? [],
+        models,
       };
     }
     m.providers = result;
@@ -510,22 +515,16 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                   </div>
                   <div>
                     <label className="text-[10px] text-gray-500 mb-0.5 block">API</label>
-                    <input
-                      list={`provider-api-opts-${pi}`}
-                      value={p.api ?? ''}
-                      onChange={e => setProviderField(pi, 'api', e.target.value)}
-                      placeholder="openai-completions"
-                      className={INPUT}
-                    />
-                    <datalist id={`provider-api-opts-${pi}`}>
-                      <option value="openai-completions" />
-                      <option value="openai-responses" />
-                      <option value="openai-codex-responses" />
-                      <option value="anthropic-messages" />
-                      <option value="google-gemini" />
-                      <option value="google-generative-ai" />
-                      <option value="ollama" />
-                    </datalist>
+                    <select value={p.api ?? ''} onChange={e => setProviderField(pi, 'api', e.target.value)} className={INPUT}>
+                      <option value="">-- select --</option>
+                      <option value="openai-completions">openai-completions</option>
+                      <option value="openai-responses">openai-responses</option>
+                      <option value="openai-codex-responses">openai-codex-responses</option>
+                      <option value="anthropic-messages">anthropic-messages</option>
+                      <option value="google-gemini">google-gemini</option>
+                      <option value="google-generative-ai">google-generative-ai</option>
+                      <option value="ollama">ollama</option>
+                    </select>
                   </div>
                   <div>
                     <label className="text-[10px] text-gray-500 mb-0.5 block">API Key</label>
@@ -569,22 +568,16 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                         </div>
                         <div className="col-span-2">
                           <label className="text-[10px] text-gray-600 mb-0.5 block">API</label>
-                          <input
-                            list={`api-opts-${pi}-${mi}`}
-                            value={m.api ?? ''}
-                            onChange={e => setModelField(pi, mi, 'api', e.target.value)}
-                            placeholder="openai-completions"
-                            className={INPUT}
-                          />
-                          <datalist id={`api-opts-${pi}-${mi}`}>
-                            <option value="openai-completions" />
-                            <option value="openai-responses" />
-                            <option value="openai-codex-responses" />
-                            <option value="anthropic-messages" />
-                            <option value="google-gemini" />
-                            <option value="google-generative-ai" />
-                            <option value="ollama" />
-                          </datalist>
+                          <select value={m.api ?? ''} onChange={e => setModelField(pi, mi, 'api', e.target.value)} className={INPUT}>
+                            <option value="">-- select --</option>
+                            <option value="openai-completions">openai-completions</option>
+                            <option value="openai-responses">openai-responses</option>
+                            <option value="openai-codex-responses">openai-codex-responses</option>
+                            <option value="anthropic-messages">anthropic-messages</option>
+                            <option value="google-gemini">google-gemini</option>
+                            <option value="google-generative-ai">google-generative-ai</option>
+                            <option value="ollama">ollama</option>
+                          </select>
                         </div>
                         <div>
                           <label className="text-[10px] text-gray-600 mb-0.5 block">Context Window</label>
