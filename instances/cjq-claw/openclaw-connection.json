@@ -1,7 +1,0 @@
-{
-  "url": "ws://openclaw.zintech.com.cn",
-  "token": "8d24555e0eefe9d76258cfa41974e1118f5414a7bf4100f9512fb91d65019d74",
-  "deviceId": "43298e2c3c462d6eddb6300e44eeb321e291d1a87a6166b62a11fc95542ab66f",
-  "privateKeyPem": "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIOkzBeCxd7NhjORz44d+lArKRk3T2CUXEzj968laXEv4\n-----END PRIVATE KEY-----\n",
-  "publicKeyBase64": "IrIPYiIRW8-ObEOohuBc1Q-OutQuHdN6a9KI9q8CoO0"
-}
