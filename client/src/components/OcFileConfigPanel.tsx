@@ -335,90 +335,118 @@ function AgentsForm({ raw, onChange }: { raw: string; onChange: (r: string) => v
 
 // ── Bindings form ─────────────────────────────────────────────────────────────
 function BindingsForm({ raw, onChange }: { raw: string; onChange: (r: string) => void }) {
-  const cfg = JSON.parse(raw) as { bindings?: BindingEntry[]; agents?: { list?: AgentEntry[] } };
-  const bindings: BindingEntry[] = cfg.bindings ?? [];
-  const agentIds = cfg.agents?.list?.map(a => a.id) ?? [];
-  const CHANNELS = [
-    'discord', 'slack', 'telegram', 'whatsapp', 'signal', 'imessage',
-    'msteams', 'googlechat', 'irc', 'matrix', 'mattermost', 'line',
-    'feishu', 'bluebubbles', 'synology-chat', 'nextcloud-talk',
-    'twitch', 'tlon', 'nostr', 'zalo', 'zalouser',
-  ];
-
-  const update = (next: BindingEntry[]) => onChange(patchJson(raw, c => { c.bindings = next; }));
-
-  const set = (i: number, path: string, val: string) => {
-    const next = bindings.map((b, idx) => {
-      if (idx !== i) return b;
-      if (path === 'agentId') return { ...b, agentId: val };
-      if (path === 'channel') return { ...b, match: { ...b.match, channel: val } };
-      if (path === 'accountId') return { ...b, match: { ...b.match, accountId: val || undefined } };
-      if (path === 'comment') return { ...b, comment: val || undefined };
-      return b;
-    });
-    update(next);
+  const cfg = JSON.parse(raw) as {
+    bindings?: Array<Record<string, unknown>>;
+    agents?: { list?: AgentEntry[] };
+    channels?: Record<string, { accounts?: Record<string, unknown> }>;
   };
+
+  const bindings = (cfg.bindings ?? []) as unknown as Array<BindingEntry & { type?: string }>;
+  const agentIds = cfg.agents?.list?.map(a => a.id).filter(Boolean) ?? [];
+  const channelKeys = Object.keys(cfg.channels ?? {});
+
+  const accountIds = (channel: string): string[] =>
+    Object.keys((cfg.channels?.[channel] as { accounts?: Record<string, unknown> })?.accounts ?? {});
+
+  const update = (next: typeof bindings) => onChange(patchJson(raw, c => { c.bindings = next; }));
+
+  const set = (i: number, field: string, val: string) => {
+    update(bindings.map((b, idx) => {
+      if (idx !== i) return b;
+      if (field === 'agentId') return { ...b, agentId: val };
+      if (field === 'channel') return { ...b, match: { channel: val } }; // reset accountId when channel changes
+      if (field === 'accountId') return { ...b, match: { ...b.match, accountId: val || undefined } };
+      if (field === 'comment') return { ...b, comment: val || undefined };
+      return b;
+    }));
+  };
+
+  const SEL = 'w-full appearance-none bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 pr-5';
 
   return (
     <div className="space-y-2">
       {bindings.length === 0 && <p className="text-xs text-gray-500 text-center py-4">No bindings configured</p>}
-      {bindings.map((b, i) => (
-        <div key={i} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5"><Link size={12} className="text-purple-400" />Binding {i + 1}</span>
-            <ConfirmButton onConfirm={() => update(bindings.filter((_, idx) => idx !== i))} label="Delete binding" />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[10px] text-gray-500 mb-0.5 block">Agent</label>
-              <div className="relative">
-                <select
-                  value={b.agentId}
-                  onChange={e => set(i, 'agentId', e.target.value)}
-                  className="w-full appearance-none bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 pr-5"
-                >
-                  {agentIds.length === 0 && <option value={b.agentId}>{b.agentId}</option>}
-                  {agentIds.map(id => <option key={id} value={id}>{id}</option>)}
-                </select>
-                <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+      {bindings.map((b, i) => {
+        const accounts = accountIds(b.match.channel);
+        return (
+          <div key={i} className="bg-gray-800 border border-gray-700 rounded-lg p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
+                <Link size={12} className="text-purple-400" />
+                Binding {i + 1}
+                <span className="text-[10px] text-gray-600 font-mono">type: route</span>
+              </span>
+              <ConfirmButton onConfirm={() => update(bindings.filter((_, idx) => idx !== i))} label="Delete binding" />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {/* Agent */}
+              <div>
+                <label className="text-[10px] text-gray-500 mb-0.5 block">Agent</label>
+                <div className="relative">
+                  <select value={b.agentId} onChange={e => set(i, 'agentId', e.target.value)} className={SEL}>
+                    {!agentIds.includes(b.agentId) && b.agentId && (
+                      <option value={b.agentId}>{b.agentId}</option>
+                    )}
+                    {agentIds.length === 0
+                      ? <option value="">— no agents defined —</option>
+                      : agentIds.map(id => <option key={id} value={id}>{id}</option>)
+                    }
+                  </select>
+                  <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Channel */}
+              <div>
+                <label className="text-[10px] text-gray-500 mb-0.5 block">Channel</label>
+                <div className="relative">
+                  <select value={b.match.channel} onChange={e => set(i, 'channel', e.target.value)} className={SEL}>
+                    {!channelKeys.includes(b.match.channel) && b.match.channel && (
+                      <option value={b.match.channel}>{b.match.channel}</option>
+                    )}
+                    {channelKeys.length === 0
+                      ? <option value="">— no channels defined —</option>
+                      : channelKeys.map(ch => <option key={ch} value={ch}>{ch}</option>)
+                    }
+                  </select>
+                  <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Account ID */}
+              <div>
+                <label className="text-[10px] text-gray-500 mb-0.5 block">Account ID</label>
+                <div className="relative">
+                  <select value={b.match.accountId ?? ''} onChange={e => set(i, 'accountId', e.target.value)} className={SEL}>
+                    <option value="">— none —</option>
+                    {!accounts.includes(b.match.accountId ?? '') && b.match.accountId && (
+                      <option value={b.match.accountId}>{b.match.accountId}</option>
+                    )}
+                    {accounts.map(id => <option key={id} value={id}>{id}</option>)}
+                  </select>
+                  <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+                </div>
+              </div>
+
+              {/* Comment */}
+              <div>
+                <label className="text-[10px] text-gray-500 mb-0.5 block">Comment</label>
+                <input
+                  value={b.comment ?? ''}
+                  onChange={e => set(i, 'comment', e.target.value)}
+                  className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
+                />
               </div>
             </div>
-            <div>
-              <label className="text-[10px] text-gray-500 mb-0.5 block">Channel</label>
-              <div className="relative">
-                <select
-                  value={b.match.channel}
-                  onChange={e => set(i, 'channel', e.target.value)}
-                  className="w-full appearance-none bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500 pr-5"
-                >
-                  {!CHANNELS.includes(b.match.channel) && <option value={b.match.channel}>{b.match.channel}</option>}
-                  {CHANNELS.map(ch => <option key={ch} value={ch}>{ch}</option>)}
-                </select>
-                <ChevronDown size={10} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
-              </div>
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 mb-0.5 block">Account ID</label>
-              <input
-                value={b.match.accountId ?? ''}
-                onChange={e => set(i, 'accountId', e.target.value)}
-                placeholder="default"
-                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-gray-500 mb-0.5 block">Comment</label>
-              <input
-                value={b.comment ?? ''}
-                onChange={e => set(i, 'comment', e.target.value)}
-                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
-              />
-            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
       <button
-        onClick={() => update([...bindings, { agentId: agentIds[0] ?? '', match: { channel: 'discord' } }])}
+        onClick={() => update([...bindings, {
+          type: 'route',
+          agentId: agentIds[0] ?? '',
+          match: { channel: channelKeys[0] ?? '' },
+        }])}
         className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-1"
       >
         <Plus size={12} />Add Binding
