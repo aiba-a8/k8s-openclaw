@@ -369,7 +369,7 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
       {/* Config Panel */}
       {mainTab === 'config' && (
         <div className="flex-1 overflow-hidden">
-          <OcFileConfigPanel instanceName={instanceName} deployType={deployType} />
+          <OcFileConfigPanel instanceName={instanceName} deployType={deployType} onSync={() => void loadFiles()} />
         </div>
       )}
 

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   Loader2, AlertCircle, Save, RefreshCw, Server, HardDrive,
-  ChevronDown, Plus, CheckCircle2, Bot, Link, Cpu, Radio,
+  ChevronDown, Plus, CheckCircle2, Bot, Link, Cpu, Radio, Download,
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { authHeaders } from '../utils/auth';
 import ConfirmButton from './ConfirmButton';
 
-interface Props { instanceName: string; deployType?: string }
+interface Props { instanceName: string; deployType?: string; onSync?: () => void }
 
 type SourceType = 'kubernetes' | 'local';
 type ViewMode = 'form' | 'raw';
@@ -33,9 +33,13 @@ interface Pod {
 // ── typed slices of openclaw.json ─────────────────────────────────────────────
 interface AgentEntry { id: string; name?: string; workspace?: string; model?: string }
 interface BindingEntry { agentId: string; match: { channel: string; accountId?: string }; comment?: string }
+interface ModelCost { input: number; output: number; cacheRead: number; cacheWrite: number }
 interface ModelEntry {
   id: string;
   name: string;
+  api?: string;
+  input?: string[];
+  cost?: ModelCost;
   contextWindow?: number;
   maxTokens?: number;
   reasoning?: boolean;
@@ -55,8 +59,8 @@ function patchJson(raw: string, fn: (cfg: Record<string, unknown>) => void): str
 
 // ── Source selector ───────────────────────────────────────────────────────────
 function SourcePanel({
-  instanceName, onLoad, deployType,
-}: { instanceName: string; onLoad: (content: string, path: string) => void; deployType?: string }) {
+  instanceName, onLoad, deployType, onSync,
+}: { instanceName: string; onLoad: (content: string, path: string) => void; deployType?: string; onSync?: () => void }) {
   // Source type is determined by deployType — no manual switching
   const sourceType: SourceType = deployType === 'kubernetes' ? 'kubernetes' : 'local';
   const [src, setSrc] = useState<OcFileSource>({ type: sourceType });
@@ -65,6 +69,8 @@ function SourcePanel({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [fetching, setFetching] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState<{ results: Record<string, string>; errors: Record<string, string> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [podsError, setPodsError] = useState<string | null>(null);
 
@@ -109,6 +115,22 @@ function SourcePanel({
       onLoad(d.content ?? '{}', d.path ?? '');
     } catch (e) { setError(String(e)); }
     finally { setFetching(false); }
+  };
+
+  const syncFromPod = async () => {
+    setSyncing(true); setSyncResult(null); setError(null);
+    await saveSource();
+    try {
+      const r = await fetch(`/api/instances/${instanceName}/sync-from-pod`, {
+        method: 'POST',
+        headers: authHeaders(),
+      });
+      const d = await r.json() as { ok?: boolean; results?: Record<string, string>; errors?: Record<string, string>; error?: string };
+      if (!r.ok) throw new Error(d.error ?? 'Sync failed');
+      setSyncResult({ results: d.results ?? {}, errors: d.errors ?? {} });
+      onSync?.();
+    } catch (e) { setError(String(e)); }
+    finally { setSyncing(false); }
   };
 
   const selectedPod = pods.find(p => p.name === src.pod);
@@ -216,14 +238,46 @@ function SourcePanel({
 
       {error && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle size={12} />{error}</p>}
 
-      <button
-        onClick={() => void fetchFile()}
-        disabled={fetching || (src.type === 'kubernetes' && !src.pod)}
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-blue-400 text-white text-xs rounded transition-colors"
-      >
-        {fetching ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
-        Load Config
-      </button>
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={() => void fetchFile()}
+          disabled={fetching || (src.type === 'kubernetes' && !src.pod)}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-blue-400 text-white text-xs rounded transition-colors"
+        >
+          {fetching ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          Load Config
+        </button>
+
+        {src.type === 'kubernetes' && src.pod && (
+          <button
+            onClick={() => void syncFromPod()}
+            disabled={syncing}
+            title="Pull Deployment/Service/PVC/ConfigMap YAML from this pod into instance files"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-700 hover:bg-purple-600 disabled:bg-purple-900 disabled:text-purple-400 text-white text-xs rounded transition-colors"
+          >
+            {syncing ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
+            Sync YAML from Pod
+          </button>
+        )}
+      </div>
+
+      {syncResult && (
+        <div className="rounded border border-gray-700 bg-gray-900 p-3 space-y-1.5 text-xs">
+          {Object.entries(syncResult.results).map(([k, v]) => (
+            <p key={k} className="flex items-center gap-1.5 text-green-400">
+              <CheckCircle2 size={11} /><span className="text-gray-400">{k}:</span> {v}
+            </p>
+          ))}
+          {Object.entries(syncResult.errors).map(([k, v]) => (
+            <p key={k} className="flex items-center gap-1.5 text-yellow-400">
+              <AlertCircle size={11} /><span className="text-gray-400">{k}:</span> {v}
+            </p>
+          ))}
+          {Object.keys(syncResult.results).length === 0 && Object.keys(syncResult.errors).length === 0 && (
+            <p className="text-gray-500">No resources found on this pod.</p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -408,7 +462,7 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
   const setModels = (i: number, models: ModelEntry[]) =>
     writeProviders(providers.map((p, idx) => idx === i ? { ...p, models } : p));
 
-  const setModelField = (pi: number, mi: number, field: keyof ModelEntry, val: string | boolean | number) => {
+  const setModelField = (pi: number, mi: number, field: keyof ModelEntry, val: string | boolean | number | string[] | ModelCost) => {
     const models = (providers[pi].models ?? []).map((m, idx) =>
       idx === mi ? { ...m, [field]: val } : m
     );
@@ -463,7 +517,7 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Models</span>
                     <button
-                      onClick={() => setModels(pi, [...models, { id: '', name: '', contextWindow: 128000, maxTokens: 8096, reasoning: false }])}
+                      onClick={() => setModels(pi, [...models, { id: '', name: '', api: 'openai-completions', input: ['text'], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8096, reasoning: false }])}
                       className="flex items-center gap-0.5 text-[10px] text-blue-400 hover:text-blue-300"
                     >
                       <Plus size={10} />Add Model
@@ -491,6 +545,25 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                           <input value={m.name} onChange={e => setModelField(pi, mi, 'name', e.target.value)}
                             placeholder="GPT-4o" className={INPUT} />
                         </div>
+                        <div className="col-span-2">
+                          <label className="text-[10px] text-gray-600 mb-0.5 block">API</label>
+                          <input
+                            list={`api-opts-${pi}-${mi}`}
+                            value={m.api ?? ''}
+                            onChange={e => setModelField(pi, mi, 'api', e.target.value)}
+                            placeholder="openai-completions"
+                            className={INPUT}
+                          />
+                          <datalist id={`api-opts-${pi}-${mi}`}>
+                            <option value="openai-completions" />
+                            <option value="openai-responses" />
+                            <option value="openai-codex-responses" />
+                            <option value="anthropic-messages" />
+                            <option value="google-gemini" />
+                            <option value="google-generative-ai" />
+                            <option value="ollama" />
+                          </datalist>
+                        </div>
                         <div>
                           <label className="text-[10px] text-gray-600 mb-0.5 block">Context Window</label>
                           <input type="number" value={m.contextWindow ?? ''} onChange={e => setModelField(pi, mi, 'contextWindow', Number(e.target.value))}
@@ -502,6 +575,53 @@ function ProvidersForm({ raw, onChange }: { raw: string; onChange: (r: string) =
                             placeholder="8096" className={INPUT} />
                         </div>
                       </div>
+
+                      {/* Input modalities */}
+                      <div>
+                        <label className="text-[10px] text-gray-600 mb-1 block">Input Modalities</label>
+                        <div className="flex gap-1.5 flex-wrap">
+                          {(['text', 'image', 'audio', 'video'] as const).map(mod => {
+                            const active = (m.input ?? []).includes(mod);
+                            return (
+                              <button
+                                key={mod}
+                                type="button"
+                                onClick={() => {
+                                  const cur = m.input ?? [];
+                                  setModelField(pi, mi, 'input', active ? cur.filter(x => x !== mod) : [...cur, mod]);
+                                }}
+                                className={`px-2 py-0.5 rounded text-[10px] border transition-colors ${active ? 'bg-blue-700 border-blue-500 text-blue-100' : 'bg-gray-800 border-gray-600 text-gray-500 hover:border-gray-400'}`}
+                              >
+                                {mod}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Cost (per 1M tokens) */}
+                      <div>
+                        <label className="text-[10px] text-gray-600 mb-1 block">Cost (per 1M tokens, USD)</label>
+                        <div className="grid grid-cols-4 gap-1">
+                          {(['input', 'output', 'cacheRead', 'cacheWrite'] as const).map(k => (
+                            <div key={k}>
+                              <label className="text-[10px] text-gray-700 mb-0.5 block capitalize">{k === 'cacheRead' ? 'Cache R' : k === 'cacheWrite' ? 'Cache W' : k}</label>
+                              <input
+                                type="number"
+                                step="0.01"
+                                value={m.cost?.[k] ?? 0}
+                                onChange={e => {
+                                  const cost: ModelCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, ...(m.cost ?? {}) };
+                                  cost[k] = Number(e.target.value);
+                                  setModelField(pi, mi, 'cost', cost);
+                                }}
+                                className={INPUT}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
                       <label className="flex items-center gap-1.5 cursor-pointer select-none">
                         <input type="checkbox" checked={m.reasoning ?? false}
                           onChange={e => setModelField(pi, mi, 'reasoning', e.target.checked)}
@@ -879,7 +999,7 @@ function ChannelsForm({ raw, onChange }: { raw: string; onChange: (r: string) =>
 }
 
 // ── Main Config Panel ─────────────────────────────────────────────────────────
-export default function OcFileConfigPanel({ instanceName, deployType }: Props) {
+export default function OcFileConfigPanel({ instanceName, deployType, onSync }: Props) {
   const isLocalDeploy = deployType === 'local';
   const [raw, setRaw] = useState<string | null>(null);
   const [filePath, setFilePath] = useState('');
@@ -993,7 +1113,7 @@ export default function OcFileConfigPanel({ instanceName, deployType }: Props) {
             <button onClick={() => setShowSource(false)} className="text-xs text-gray-400 hover:text-gray-200">← Back</button>
           )}
         </div>
-        <SourcePanel instanceName={instanceName} onLoad={handleLoad} deployType={deployType} />
+        <SourcePanel instanceName={instanceName} onLoad={handleLoad} deployType={deployType} onSync={onSync} />
       </div>
     );
   }

@@ -872,6 +872,129 @@ app.put('/api/instances/:name/oc-config/file', async (req: Request, res: Respons
   }
 });
 
+// POST /api/instances/:name/sync-from-pod
+app.post('/api/instances/:name/sync-from-pod', async (req: Request, res: Response) => {
+  const { name } = req.params;
+  const src = readOcFileSource(name);
+
+  if (src.type !== 'kubernetes' || !src.pod) {
+    return res.status(400).json({ error: 'No kubernetes pod selected in oc-config source' });
+  }
+
+  const nsArgs = src.namespace ? ['-n', src.namespace] : [];
+  const instanceDir = path.join(INSTANCES_DIR, name);
+  const results: Record<string, string> = {};
+  const errors: Record<string, string> = {};
+
+  ocLog(name, 'info', 'sync', `syncing YAML from pod ${src.pod}`);
+
+  try {
+    // Get pod as JSON for parsing owner refs and volumes
+    const { stdout: podJson } = await spawnCollect('kubectl', ['get', 'pod', src.pod, ...nsArgs, '-o', 'json']);
+    const pod = JSON.parse(podJson) as {
+      metadata: {
+        labels?: Record<string, string>;
+        ownerReferences?: Array<{ kind: string; name: string }>;
+      };
+      spec: {
+        volumes?: Array<{
+          name: string;
+          persistentVolumeClaim?: { claimName: string };
+          configMap?: { name: string };
+        }>;
+      };
+    };
+
+    // ── 1. Deployment (pod → ReplicaSet → Deployment) ──────────────────────
+    let deploymentName: string | null = null;
+    const owners = pod.metadata.ownerReferences ?? [];
+    const directDeployOwner = owners.find(o => o.kind === 'Deployment');
+    const rsOwner = owners.find(o => o.kind === 'ReplicaSet');
+
+    if (directDeployOwner) {
+      deploymentName = directDeployOwner.name;
+    } else if (rsOwner) {
+      try {
+        const { stdout: rsJson } = await spawnCollect('kubectl', ['get', 'replicaset', rsOwner.name, ...nsArgs, '-o', 'json']);
+        const rs = JSON.parse(rsJson) as { metadata: { ownerReferences?: Array<{ kind: string; name: string }> } };
+        const depOwner = rs.metadata.ownerReferences?.find(o => o.kind === 'Deployment');
+        if (depOwner) deploymentName = depOwner.name;
+      } catch (e) {
+        errors.deployment = `ReplicaSet lookup failed: ${String(e)}`;
+      }
+    }
+
+    if (deploymentName) {
+      try {
+        const { stdout: yaml } = await spawnCollect('kubectl', ['get', 'deployment', deploymentName, ...nsArgs, '-o', 'yaml']);
+        fs.writeFileSync(path.join(instanceDir, 'deployment.yaml'), yaml, 'utf-8');
+        results.deployment = deploymentName;
+        ocLog(name, 'info', 'sync', `saved deployment.yaml (${deploymentName})`);
+      } catch (e) {
+        errors.deployment = String(e);
+      }
+    }
+
+    // ── 2. Service (match by pod labels, skip pod-template-hash) ───────────
+    const podLabels = pod.metadata.labels ?? {};
+    const labelSelector = Object.entries(podLabels)
+      .filter(([k]) => k !== 'pod-template-hash')
+      .map(([k, v]) => `${k}=${v}`)
+      .join(',');
+
+    if (labelSelector) {
+      try {
+        const { stdout: svcJson } = await spawnCollect('kubectl', ['get', 'service', '-l', labelSelector, ...nsArgs, '-o', 'json']);
+        const svcList = JSON.parse(svcJson) as { items: Array<{ metadata: { name: string } }> };
+        if (svcList.items?.length > 0) {
+          const svcName = svcList.items[0].metadata.name;
+          const { stdout: svcYaml } = await spawnCollect('kubectl', ['get', 'service', svcName, ...nsArgs, '-o', 'yaml']);
+          fs.writeFileSync(path.join(instanceDir, 'service.yaml'), svcYaml, 'utf-8');
+          results.service = svcName;
+          ocLog(name, 'info', 'sync', `saved service.yaml (${svcName})`);
+        }
+      } catch (e) {
+        errors.service = String(e);
+      }
+    }
+
+    // ── 3. PVC (first PVC volume in pod spec) ──────────────────────────────
+    const pvcVolumes = (pod.spec.volumes ?? []).filter(v => v.persistentVolumeClaim);
+    if (pvcVolumes.length > 0) {
+      const pvcName = pvcVolumes[0].persistentVolumeClaim!.claimName;
+      try {
+        const { stdout: pvcYaml } = await spawnCollect('kubectl', ['get', 'pvc', pvcName, ...nsArgs, '-o', 'yaml']);
+        fs.writeFileSync(path.join(instanceDir, 'pvc.yaml'), pvcYaml, 'utf-8');
+        results.pvc = pvcName;
+        ocLog(name, 'info', 'sync', `saved pvc.yaml (${pvcName})`);
+      } catch (e) {
+        errors.pvc = String(e);
+      }
+    }
+
+    // ── 4. ConfigMap (first non-system configmap volume) ───────────────────
+    const cmVolumes = (pod.spec.volumes ?? [])
+      .filter(v => v.configMap && v.configMap.name !== 'kube-root-ca.crt');
+    if (cmVolumes.length > 0) {
+      const cmName = cmVolumes[0].configMap!.name;
+      try {
+        const { stdout: cmYaml } = await spawnCollect('kubectl', ['get', 'configmap', cmName, ...nsArgs, '-o', 'yaml']);
+        fs.writeFileSync(path.join(instanceDir, 'configmap.yaml'), cmYaml, 'utf-8');
+        results.configmap = cmName;
+        ocLog(name, 'info', 'sync', `saved configmap.yaml (${cmName})`);
+      } catch (e) {
+        errors.configmap = String(e);
+      }
+    }
+
+    ocLog(name, 'info', 'sync', `sync complete: ${Object.keys(results).length} file(s) saved`, results);
+    return res.json({ ok: true, results, errors });
+  } catch (err) {
+    ocLog(name, 'error', 'sync', `sync failed: ${String(err)}`);
+    return res.status(502).json({ error: String(err) });
+  }
+});
+
 // Serve static files in production
 const clientDist = path.join(__dirname, '../../client/dist');
 if (fs.existsSync(clientDist)) {
