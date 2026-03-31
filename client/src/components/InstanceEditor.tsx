@@ -33,7 +33,21 @@ function InstanceInfoPanel({ name, deployType, gatewayToken, createdAt }: {
 
   const copyToken = () => {
     if (!gatewayToken) return;
-    void navigator.clipboard.writeText(gatewayToken);
+    const doFallback = () => {
+      const ta = document.createElement('textarea');
+      ta.value = gatewayToken;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+    };
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(gatewayToken).catch(doFallback);
+    } else {
+      doFallback();
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
