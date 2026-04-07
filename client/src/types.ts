@@ -1,4 +1,4 @@
-export type DeployType = 'kubernetes' | 'local' | 'docker';
+export type DeployType = 'kubernetes' | 'local' | 'ssh' | 'docker';
 
 export interface Instance {
   name: string;

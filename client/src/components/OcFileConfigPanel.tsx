@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   Loader2, AlertCircle, Save, RefreshCw, Server, HardDrive,
   ChevronDown, Plus, CheckCircle2, Bot, Link, Cpu, Radio, Download,
+  Globe, Eye, EyeOff,
 } from 'lucide-react';
 import Editor from '@monaco-editor/react';
 import { authHeaders } from '../utils/auth';
@@ -9,7 +10,7 @@ import ConfirmButton from './ConfirmButton';
 
 interface Props { instanceName: string; deployType?: string; onSync?: () => void }
 
-type SourceType = 'kubernetes' | 'local';
+type SourceType = 'kubernetes' | 'local' | 'ssh';
 type ViewMode = 'form' | 'raw';
 type FormTab = 'agents' | 'bindings' | 'providers' | 'channels';
 
@@ -20,6 +21,13 @@ interface OcFileSource {
   container?: string;
   filePath?: string;
   localPath?: string;
+}
+
+interface SshCreds {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
 }
 
 interface Pod {
@@ -63,7 +71,7 @@ function SourcePanel({
   instanceName, onLoad, deployType, onSync,
 }: { instanceName: string; onLoad: (content: string, path: string) => void; deployType?: string; onSync?: () => void }) {
   // Source type is determined by deployType — no manual switching
-  const sourceType: SourceType = deployType === 'kubernetes' ? 'kubernetes' : 'local';
+  const sourceType: SourceType = deployType === 'kubernetes' ? 'kubernetes' : deployType === 'ssh' ? 'ssh' : 'local';
   const [src, setSrc] = useState<OcFileSource>({ type: sourceType });
   const [pods, setPods] = useState<Pod[]>([]);
   const [loadingPods, setLoadingPods] = useState(false);
@@ -74,12 +82,24 @@ function SourcePanel({
   const [syncResult, setSyncResult] = useState<{ results: Record<string, string>; errors: Record<string, string> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [podsError, setPodsError] = useState<string | null>(null);
+  // SSH credentials state
+  const [sshCreds, setSshCreds] = useState<SshCreds>({ host: '', port: 22, username: '', password: '' });
+  const [showSshPass, setShowSshPass] = useState(false);
+  const [savingCreds, setSavingCreds] = useState(false);
 
   useEffect(() => {
     fetch(`/api/instances/${instanceName}/oc-config/source`, { headers: authHeaders() })
       .then(r => r.json())
       .then((d: OcFileSource) => setSrc({ ...d, type: sourceType }))
       .finally(() => setLoading(false));
+  }, [instanceName, sourceType]);
+
+  // Load SSH credentials when type is ssh
+  useEffect(() => {
+    if (sourceType !== 'ssh') return;
+    fetch(`/api/instances/${instanceName}/ssh-credentials`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: SshCreds | null) => { if (d) setSshCreds(d); });
   }, [instanceName, sourceType]);
 
   const loadPods = async () => {
@@ -106,8 +126,20 @@ function SourcePanel({
     finally { setSaving(false); }
   };
 
+  const saveSshCreds = async () => {
+    setSavingCreds(true);
+    try {
+      await fetch(`/api/instances/${instanceName}/ssh-credentials`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(sshCreds),
+      });
+    } finally { setSavingCreds(false); }
+  };
+
   const fetchFile = async () => {
     setFetching(true); setError(null);
+    if (sourceType === 'ssh') await saveSshCreds();
     await saveSource();
     try {
       const r = await fetch(`/api/instances/${instanceName}/oc-config/file`, { headers: authHeaders() });
@@ -143,6 +175,8 @@ function SourcePanel({
       <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider flex items-center gap-2">
         {sourceType === 'kubernetes'
           ? <><Server size={13} className="text-blue-400" />Kubernetes Config Source</>
+          : sourceType === 'ssh'
+          ? <><Globe size={13} className="text-purple-400" />Remote SSH Config Source</>
           : <><HardDrive size={13} className="text-blue-400" />Local Config Source</>
         }
       </h3>
@@ -237,12 +271,75 @@ function SourcePanel({
         </div>
       )}
 
+      {src.type === 'ssh' && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="col-span-2">
+              <label className="text-xs text-gray-400 mb-1 block">Host</label>
+              <input
+                value={sshCreds.host}
+                onChange={e => setSshCreds(s => ({ ...s, host: e.target.value }))}
+                placeholder="192.168.1.100"
+                className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Port</label>
+              <input
+                type="number"
+                value={sshCreds.port}
+                onChange={e => setSshCreds(s => ({ ...s, port: parseInt(e.target.value) || 22 }))}
+                min="1" max="65535"
+                className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-100 focus:outline-none focus:border-blue-500 font-mono"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Username</label>
+              <input
+                value={sshCreds.username}
+                onChange={e => setSshCreds(s => ({ ...s, username: e.target.value }))}
+                placeholder="root"
+                autoComplete="username"
+                className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-gray-400 mb-1 block">Password</label>
+              <div className="relative">
+                <input
+                  type={showSshPass ? 'text' : 'password'}
+                  value={sshCreds.password}
+                  onChange={e => setSshCreds(s => ({ ...s, password: e.target.value }))}
+                  placeholder="SSH password"
+                  autoComplete="current-password"
+                  className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 pr-7 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+                />
+                <button type="button" onClick={() => setShowSshPass(v => !v)} className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300">
+                  {showSshPass ? <EyeOff size={11} /> : <Eye size={11} />}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label className="text-xs text-gray-400 mb-1 block">Remote File Path</label>
+            <input
+              value={src.filePath ?? ''}
+              onChange={e => setSrc(s => ({ ...s, filePath: e.target.value || undefined }))}
+              placeholder="~/.openclaw/openclaw.json"
+              className="w-full bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:border-blue-500 font-mono"
+            />
+          </div>
+        </div>
+      )}
+
       {error && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle size={12} />{error}</p>}
 
       <div className="flex items-center gap-2 flex-wrap">
         <button
           onClick={() => void fetchFile()}
-          disabled={fetching || (src.type === 'kubernetes' && !src.pod)}
+          disabled={fetching || savingCreds || (src.type === 'kubernetes' && !src.pod) || (src.type === 'ssh' && !sshCreds.host)}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-blue-400 text-white text-xs rounded transition-colors"
         >
           {fetching ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}

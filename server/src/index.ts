@@ -8,6 +8,7 @@ import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
 import { spawn } from 'child_process';
 import { randomUUID } from 'crypto';
 import * as url from 'url';
+import { Client as SshClient } from 'ssh2';
 import {
   OpenClawConnectionConfig,
   getOrCreateClient,
@@ -174,7 +175,7 @@ app.get('/api/instances', (_req: Request, res: Response) => {
 
 // POST /api/instances
 app.post('/api/instances', (req: Request, res: Response) => {
-  const { name, deployType = 'kubernetes', gatewayToken, registerOnly } = req.body as { name: string; deployType?: string; gatewayToken?: string; registerOnly?: boolean };
+  const { name, deployType = 'kubernetes', gatewayToken, registerOnly, sshCredentials, gatewayUrl } = req.body as { name: string; deployType?: string; gatewayToken?: string; registerOnly?: boolean; sshCredentials?: { host: string; port: number; username: string; password: string }; gatewayUrl?: string };
   if (!name || !/^[a-z0-9-]+$/.test(name)) {
     return res.status(400).json({ error: 'Invalid instance name. Use lowercase letters, numbers, and dashes only.' });
   }
@@ -202,6 +203,24 @@ app.post('/api/instances', (req: Request, res: Response) => {
       JSON.stringify({ name, deployType, createdAt, ...(resolvedToken ? { gatewayToken: resolvedToken } : {}) }, null, 2),
       'utf-8',
     );
+
+    // Save SSH credentials separately
+    if (deployType === 'ssh' && sshCredentials) {
+      fs.writeFileSync(
+        path.join(instanceDir, 'ssh-credentials.json'),
+        JSON.stringify(sshCredentials, null, 2),
+        'utf-8',
+      );
+    }
+
+    // Save gateway URL to connection config if provided
+    if (gatewayUrl?.trim()) {
+      let ocUrl = gatewayUrl.trim();
+      if (ocUrl.startsWith('http://')) ocUrl = 'ws://' + ocUrl.slice(7);
+      else if (ocUrl.startsWith('https://')) ocUrl = 'wss://' + ocUrl.slice(8);
+      else if (!ocUrl.startsWith('ws://') && !ocUrl.startsWith('wss://')) ocUrl = 'ws://' + ocUrl.replace(/^\/\//, '');
+      writeOcConfig(name, { url: ocUrl });
+    }
 
     // For register-only: skip YAML template creation
     const files: string[] = [];
@@ -443,6 +462,84 @@ app.post('/api/instances/:name/local-install', (req: Request, res: Response) => 
   };
 
   runNext();
+});
+
+// POST /api/instances/:name/ssh-install  – install openclaw on remote server via SSH
+app.post('/api/instances/:name/ssh-install', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const instanceDir = path.join(INSTANCES_DIR, name);
+  if (!fs.existsSync(instanceDir)) {
+    return res.status(404).json({ error: `Instance "${name}" not found.` });
+  }
+
+  const credsPath = path.join(instanceDir, 'ssh-credentials.json');
+  if (!fs.existsSync(credsPath)) {
+    return res.status(400).json({ error: 'SSH credentials not found for this instance.' });
+  }
+
+  let creds: { host: string; port: number; username: string; password: string };
+  try {
+    creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8')) as { host: string; port: number; username: string; password: string };
+  } catch {
+    return res.status(500).json({ error: 'Failed to read SSH credentials.' });
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  const send = (type: 'log' | 'done', text: string) => {
+    res.write(`data: ${JSON.stringify({ type, text })}\n\n`);
+  };
+
+  const conn = new SshClient();
+
+  req.on('close', () => { try { conn.end(); } catch { /* ignore */ } });
+
+  conn.on('ready', () => {
+    send('log', `✓ Connected to ${creds.host}:${creds.port} as ${creds.username}\n`);
+    send('log', '\n▶ npm install -g openclaw@latest\n');
+
+    conn.exec('npm install -g openclaw@latest', (err, stream) => {
+      if (err) {
+        send('log', `\n✗ Error: ${err.message}\n`);
+        send('done', 'error');
+        conn.end();
+        res.end();
+        return;
+      }
+
+      stream.on('data', (data: Buffer) => { send('log', data.toString()); });
+      stream.stderr.on('data', (data: Buffer) => { send('log', data.toString()); });
+
+      stream.on('close', (code: number) => {
+        conn.end();
+        if (code === 0) {
+          send('log', '\n✓ Installation completed.\n');
+          send('done', 'success');
+        } else {
+          send('log', `\n✗ Installation failed (exit code ${code}).\n`);
+          send('done', 'error');
+        }
+        res.end();
+      });
+    });
+  });
+
+  conn.on('error', (err: Error) => {
+    send('log', `\n✗ SSH connection error: ${err.message}\n`);
+    send('done', 'error');
+    res.end();
+  });
+
+  conn.connect({
+    host: creds.host,
+    port: creds.port,
+    username: creds.username,
+    password: creds.password,
+    readyTimeout: 20000,
+  });
 });
 
 // GET /api/instances/:name/status
@@ -719,12 +816,64 @@ const OC_FILE_SOURCE = 'openclaw-file-source.json';
 const OC_FILE_DEFAULT_PATH = '~/.openclaw/openclaw.json';
 
 interface OcFileSource {
-  type: 'kubernetes' | 'local';
+  type: 'kubernetes' | 'local' | 'ssh';
   namespace?: string;
   pod?: string;
   container?: string;
   filePath?: string;
   localPath?: string;
+}
+
+interface SshCredentials {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+}
+
+function readSshCredentials(instanceName: string): SshCredentials | null {
+  const p = path.join(INSTANCES_DIR, instanceName, 'ssh-credentials.json');
+  if (!fs.existsSync(p)) return null;
+  try { return JSON.parse(fs.readFileSync(p, 'utf-8')) as SshCredentials; } catch { return null; }
+}
+
+function sshExec(creds: SshCredentials, command: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const conn = new SshClient();
+    conn.on('ready', () => {
+      conn.exec(command, (err, stream) => {
+        if (err) { conn.end(); reject(err); return; }
+        let out = '';
+        stream.on('data', (d: Buffer) => { out += d.toString(); });
+        stream.stderr.on('data', (d: Buffer) => { out += d.toString(); });
+        stream.on('close', (code: number) => {
+          conn.end();
+          if (code === 0) resolve(out);
+          else reject(new Error(out.trim() || `exit code ${code}`));
+        });
+      });
+    });
+    conn.on('error', reject);
+    conn.connect({ host: creds.host, port: creds.port, username: creds.username, password: creds.password, readyTimeout: 15000 });
+  });
+}
+
+function sshWriteFile(creds: SshCredentials, filePath: string, content: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const conn = new SshClient();
+    conn.on('ready', () => {
+      conn.sftp((err, sftp) => {
+        if (err) { conn.end(); reject(err); return; }
+        const writeStream = sftp.createWriteStream(filePath);
+        writeStream.on('close', () => { conn.end(); resolve(); });
+        writeStream.on('error', (e: Error) => { conn.end(); reject(e); });
+        writeStream.write(content);
+        writeStream.end();
+      });
+    });
+    conn.on('error', reject);
+    conn.connect({ host: creds.host, port: creds.port, username: creds.username, password: creds.password, readyTimeout: 15000 });
+  });
 }
 
 function readOcFileSource(instanceName: string): OcFileSource {
@@ -767,8 +916,26 @@ app.get('/api/instances/:name/oc-config/source', (req: Request, res: Response) =
 // PUT /api/instances/:name/oc-config/source
 app.put('/api/instances/:name/oc-config/source', (req: Request, res: Response) => {
   const src = req.body as OcFileSource;
-  if (!['kubernetes', 'local'].includes(src.type)) return res.status(400).json({ error: 'invalid type' });
+  if (!['kubernetes', 'local', 'ssh'].includes(src.type)) return res.status(400).json({ error: 'invalid type' });
   writeOcFileSource(req.params.name, src);
+  return res.json({ ok: true });
+});
+
+// GET /api/instances/:name/ssh-credentials
+app.get('/api/instances/:name/ssh-credentials', (req: Request, res: Response) => {
+  const creds = readSshCredentials(req.params.name);
+  if (!creds) return res.status(404).json({ error: 'SSH credentials not configured' });
+  return res.json(creds);
+});
+
+// PUT /api/instances/:name/ssh-credentials
+app.put('/api/instances/:name/ssh-credentials', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const instanceDir = path.join(INSTANCES_DIR, name);
+  if (!fs.existsSync(instanceDir)) return res.status(404).json({ error: `Instance "${name}" not found.` });
+  const creds = req.body as SshCredentials;
+  if (!creds.host || !creds.username || !creds.password) return res.status(400).json({ error: 'host, username and password are required' });
+  fs.writeFileSync(path.join(instanceDir, 'ssh-credentials.json'), JSON.stringify({ host: creds.host, port: creds.port || 22, username: creds.username, password: creds.password }, null, 2), 'utf-8');
   return res.json({ ok: true });
 });
 
@@ -821,6 +988,20 @@ app.get('/api/instances/:name/oc-config/file', async (req: Request, res: Respons
       return res.status(502).json({ error: String(e) });
     }
   }
+  if (src.type === 'ssh') {
+    const creds = readSshCredentials(name);
+    if (!creds) return res.status(400).json({ error: 'SSH credentials not configured for this instance' });
+    const filePath = src.filePath || '~/.openclaw/openclaw.json';
+    ocLog(name, 'info', 'ssh', `read remote file: ${creds.host}:${filePath}`);
+    try {
+      const content = await sshExec(creds, `cat ${filePath}`);
+      ocLog(name, 'info', 'ssh', `read ${content.length} bytes from ${creds.host}:${filePath}`);
+      return res.json({ content, path: `${creds.host}:${filePath}` });
+    } catch (err) {
+      ocLog(name, 'error', 'ssh', `read failed: ${String(err)}`);
+      return res.status(502).json({ error: String(err) });
+    }
+  }
   if (!src.pod) return res.status(400).json({ error: 'No pod selected' });
   // Use sh -c to resolve ~ correctly for any container user (avoids /root permission denied)
   const filePath = src.filePath || '~/.openclaw/openclaw.json';
@@ -855,6 +1036,21 @@ app.put('/api/instances/:name/oc-config/file', async (req: Request, res: Respons
     } catch (e) {
       ocLog(name, 'error', 'config', `write failed: ${String(e)}`);
       return res.status(502).json({ error: String(e) });
+    }
+  }
+  if (src.type === 'ssh') {
+    const creds = readSshCredentials(name);
+    if (!creds) return res.status(400).json({ error: 'SSH credentials not configured for this instance' });
+    const filePath = src.filePath || '~/.openclaw/openclaw.json';
+    ocLog(name, 'info', 'ssh', `write remote file: ${creds.host}:${filePath} (${content.length} bytes)`);
+    try {
+      // Expand ~ by writing via shell heredoc approach
+      await sshExec(creds, `cat > ${filePath} << 'OCEOF'\n${content}\nOCEOF`);
+      ocLog(name, 'info', 'ssh', `saved successfully to ${creds.host}:${filePath}`);
+      return res.json({ ok: true });
+    } catch (err) {
+      ocLog(name, 'error', 'ssh', `write failed: ${String(err)}`);
+      return res.status(502).json({ error: String(err) });
     }
   }
   if (!src.pod) return res.status(400).json({ error: 'No pod selected' });

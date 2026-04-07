@@ -2,14 +2,21 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
   X, Plus, Loader2, AlertCircle, Server, HardDrive,
   Check, Copy, CheckCircle2, XCircle, Container, RefreshCw, Eye, EyeOff,
-  FolderPlus, Rocket,
+  FolderPlus, Rocket, Globe,
 } from 'lucide-react';
 import type { DeployType } from '../types';
 import { authHeaders } from '../utils/auth';
 
+interface SshCredentials {
+  host: string;
+  port: number;
+  username: string;
+  password: string;
+}
+
 interface Props {
   onClose: () => void;
-  onCreate: (name: string, deployType: DeployType, gatewayToken?: string, registerOnly?: boolean) => Promise<void>;
+  onCreate: (name: string, deployType: DeployType, gatewayToken?: string, registerOnly?: boolean, sshCredentials?: SshCredentials, gatewayUrl?: string) => Promise<void>;
 }
 
 type ModalTab = 'deploy' | 'register';
@@ -43,6 +50,13 @@ const DEPLOY_TYPES: Array<{
     available: true,
   },
   {
+    id: 'ssh',
+    label: 'Remote SSH',
+    desc: 'Install & run OpenClaw on a remote server via SSH',
+    icon: <Globe size={20} />,
+    available: true,
+  },
+  {
     id: 'docker',
     label: 'Docker',
     desc: 'Run OpenClaw in a Docker container',
@@ -70,7 +84,7 @@ function DeployTypeSelector({ value, onChange }: { value: DeployType | null; onC
   return (
     <div>
       <label className="block text-xs font-medium text-gray-400 mb-2">Deploy Type</label>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-2 gap-2">
         {DEPLOY_TYPES.map(t => (
           <button
             key={t.id}
@@ -133,9 +147,11 @@ type InstallStatus = 'running' | 'success' | 'error';
 
 function InstallProgress({
   instanceName,
+  installPath = 'local-install',
   onDone,
 }: {
   instanceName: string;
+  installPath?: string;
   onDone: (status: InstallStatus) => void;
 }) {
   const [lines, setLines] = useState<string[]>([]);
@@ -146,7 +162,7 @@ function InstallProgress({
     const ctrl = new AbortController();
     const run = async () => {
       try {
-        const res = await fetch(`/api/instances/${instanceName}/local-install`, {
+        const res = await fetch(`/api/instances/${instanceName}/${installPath}`, {
           method: 'POST', headers: authHeaders(), signal: ctrl.signal,
         });
         if (!res.ok || !res.body) {
@@ -241,6 +257,34 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
   const [createdName, setCreatedName] = useState('');
   const [installStatus, setInstallStatus] = useState<InstallStatus>('running');
 
+  // ── Gateway URL state ─────────────────────────────────────────────────────
+  const [deployGatewayUrl, setDeployGatewayUrl] = useState('');
+  const [regGatewayUrl, setRegGatewayUrl] = useState('');
+
+  // ── SSH state ─────────────────────────────────────────────────────────────
+  const [sshHost, setSshHost] = useState('');
+  const [sshPort, setSshPort] = useState('22');
+  const [sshUsername, setSshUsername] = useState('');
+  const [sshPassword, setSshPassword] = useState('');
+  const [showSshPassword, setShowSshPassword] = useState(false);
+
+  // Auto-derive gateway URL from SSH host
+  useEffect(() => {
+    if (deployType === 'ssh' && sshHost.trim()) {
+      setDeployGatewayUrl(`ws://${sshHost.trim()}:18789`);
+    }
+  }, [sshHost, deployType]);
+
+  // Reset gateway URL when deploy type changes
+  useEffect(() => {
+    if (deployType === 'local' || deployType === 'kubernetes') {
+      setDeployGatewayUrl('ws://localhost:18789');
+    } else if (deployType === 'ssh') {
+      setDeployGatewayUrl(sshHost.trim() ? `ws://${sshHost.trim()}:18789` : '');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deployType]);
+
   // ── Tab 2: Register state ─────────────────────────────────────────────────
   const [regName, setRegName] = useState('');
   const [regType, setRegType] = useState<DeployType | null>(null);
@@ -248,6 +292,12 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
   const [showRegToken, setShowRegToken] = useState(false);
   const [regLoading, setRegLoading] = useState(false);
   const [regError, setRegError] = useState<string | null>(null);
+  // ── Register SSH state ────────────────────────────────────────────────────
+  const [regSshHost, setRegSshHost] = useState('');
+  const [regSshPort, setRegSshPort] = useState('22');
+  const [regSshUsername, setRegSshUsername] = useState('');
+  const [regSshPassword, setRegSshPassword] = useState('');
+  const [showRegSshPassword, setShowRegSshPassword] = useState(false);
 
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, [modalTab]);
@@ -259,11 +309,15 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
   const handleDeploySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!deployNameValid || !deployType || deployLoading) return;
+    if (deployType === 'ssh' && (!sshHost.trim() || !sshUsername.trim() || !sshPassword)) return;
     setDeployLoading(true);
     setDeployError(null);
     try {
-      await onCreate(deployName, deployType, deployType === 'kubernetes' ? deployToken : undefined);
-      if (deployType === 'local') {
+      const sshCreds = deployType === 'ssh'
+        ? { host: sshHost.trim(), port: parseInt(sshPort) || 22, username: sshUsername.trim(), password: sshPassword }
+        : undefined;
+      await onCreate(deployName, deployType, deployType === 'kubernetes' ? deployToken : undefined, undefined, sshCreds, deployGatewayUrl.trim() || undefined);
+      if (deployType === 'local' || deployType === 'ssh') {
         setCreatedName(deployName);
         setPhase('installing');
       } else {
@@ -279,10 +333,14 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!regNameValid || !regType || regLoading) return;
+    if (regType === 'ssh' && (!regSshHost.trim() || !regSshUsername.trim() || !regSshPassword)) return;
     setRegLoading(true);
     setRegError(null);
     try {
-      await onCreate(regName, regType, regToken.trim() || undefined, true);
+      const sshCreds = regType === 'ssh'
+        ? { host: regSshHost.trim(), port: parseInt(regSshPort) || 22, username: regSshUsername.trim(), password: regSshPassword }
+        : undefined;
+      await onCreate(regName, regType, regToken.trim() || undefined, true, sshCreds, regGatewayUrl.trim() || undefined);
       onClose();
     } catch (err) {
       setRegError(String(err));
@@ -302,9 +360,11 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
         <div className="bg-gray-800 rounded-lg shadow-2xl border border-gray-700 w-full max-w-2xl mx-4 flex flex-col max-h-[90vh]">
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-700 flex-shrink-0">
             <div className="flex items-center gap-2">
-              <HardDrive size={15} className="text-blue-400" />
+              {deployType === 'ssh'
+                ? <Globe size={15} className="text-purple-400" />
+                : <HardDrive size={15} className="text-blue-400" />}
               <h2 className="text-base font-semibold text-gray-100">
-                Installing — <span className="text-blue-300">{createdName}</span>
+                {deployType === 'ssh' ? 'Remote Install' : 'Installing'} — <span className={deployType === 'ssh' ? 'text-purple-300' : 'text-blue-300'}>{createdName}</span>
               </h2>
             </div>
             {phase === 'done' && (
@@ -314,7 +374,7 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
             )}
           </div>
           <div className="px-5 py-4 overflow-y-auto flex-1">
-            <InstallProgress instanceName={createdName} onDone={handleInstallDone} />
+            <InstallProgress instanceName={createdName} installPath={deployType === 'ssh' ? 'ssh-install' : 'local-install'} onDone={handleInstallDone} />
           </div>
           {phase === 'done' && (
             <div className="flex justify-end gap-3 px-5 py-4 border-t border-gray-700 flex-shrink-0">
@@ -388,6 +448,68 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
                 </div>
               )}
 
+              {deployType === 'ssh' && (
+                <>
+                  <div className="text-xs text-gray-400 flex items-start gap-2 bg-gray-900/50 border border-gray-700 rounded-lg p-3">
+                    <Globe size={13} className="text-purple-400 flex-shrink-0 mt-0.5" />
+                    <span>Connects to a remote server via SSH and installs <strong className="text-gray-300">openclaw</strong> using <code className="text-green-300">npm install -g openclaw@latest</code>. Installation logs will be streamed in real-time.</span>
+                  </div>
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-3 gap-2">
+                      <div className="col-span-2">
+                        <label className="block text-xs font-medium text-gray-400 mb-1.5">Host</label>
+                        <input
+                          type="text"
+                          value={sshHost}
+                          onChange={e => { setSshHost(e.target.value); setDeployError(null); }}
+                          placeholder="192.168.1.100"
+                          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-400 mb-1.5">Port</label>
+                        <input
+                          type="number"
+                          value={sshPort}
+                          onChange={e => setSshPort(e.target.value)}
+                          placeholder="22"
+                          min="1"
+                          max="65535"
+                          className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+                      <input
+                        type="text"
+                        value={sshUsername}
+                        onChange={e => { setSshUsername(e.target.value); setDeployError(null); }}
+                        placeholder="root"
+                        autoComplete="username"
+                        className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
+                      <div className="relative">
+                        <input
+                          type={showSshPassword ? 'text' : 'password'}
+                          value={sshPassword}
+                          onChange={e => { setSshPassword(e.target.value); setDeployError(null); }}
+                          placeholder="Enter SSH password"
+                          autoComplete="current-password"
+                          className="w-full px-3 py-2 pr-8 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                        />
+                        <button type="button" onClick={() => setShowSshPassword(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200">
+                          {showSshPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </>
+              )}
+
               {deployType === 'kubernetes' && (
                 <>
                   <div className="text-xs text-gray-400 flex items-start gap-2 bg-gray-900/50 border border-gray-700 rounded-lg p-3">
@@ -419,6 +541,22 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
                 </>
               )}
 
+              {deployType && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                    Gateway URL <span className="text-gray-600 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={deployGatewayUrl}
+                    onChange={e => setDeployGatewayUrl(e.target.value)}
+                    placeholder="ws://host:18789"
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">WebSocket address for connecting to the OpenClaw gateway</p>
+                </div>
+              )}
+
               {deployError && (
                 <div className="flex items-start gap-2 p-3 bg-red-900/30 border border-red-700/50 rounded text-red-400 text-sm">
                   <AlertCircle size={14} className="flex-shrink-0 mt-0.5" /><span>{deployError}</span>
@@ -429,7 +567,7 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
               <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-300 hover:text-gray-100 hover:bg-gray-700 rounded-md transition-colors">Cancel</button>
               <button
                 type="submit"
-                disabled={!deployNameValid || !deployType || deployLoading}
+                disabled={!deployNameValid || !deployType || deployLoading || (deployType === 'ssh' && (!sshHost.trim() || !sshUsername.trim() || !sshPassword))}
                 className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-blue-300 disabled:cursor-not-allowed text-white rounded-md transition-colors"
               >
                 {deployLoading ? <><Loader2 size={14} className="animate-spin" />Creating…</> : <><Plus size={14} />Create</>}
@@ -450,6 +588,66 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
               <NameInput value={regName} onChange={v => { setRegName(v); setRegError(null); }} inputRef={inputRef} />
 
               <DeployTypeSelector value={regType} onChange={t => { setRegType(t); setRegError(null); }} />
+
+              {regType === 'ssh' && (
+                <div className="space-y-3">
+                  <div className="text-xs text-gray-400 flex items-start gap-2 bg-gray-900/50 border border-gray-700 rounded-lg p-3">
+                    <Globe size={13} className="text-purple-400 flex-shrink-0 mt-0.5" />
+                    <span>SSH credentials are used to load and save the remote <code className="text-green-300">openclaw.json</code> config file in the Config tab.</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <div className="col-span-2">
+                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Host</label>
+                      <input
+                        type="text"
+                        value={regSshHost}
+                        onChange={e => { setRegSshHost(e.target.value); setRegError(null); }}
+                        placeholder="192.168.1.100"
+                        className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-400 mb-1.5">Port</label>
+                      <input
+                        type="number"
+                        value={regSshPort}
+                        onChange={e => setRegSshPort(e.target.value)}
+                        placeholder="22"
+                        min="1"
+                        max="65535"
+                        className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1.5">Username</label>
+                    <input
+                      type="text"
+                      value={regSshUsername}
+                      onChange={e => { setRegSshUsername(e.target.value); setRegError(null); }}
+                      placeholder="root"
+                      autoComplete="username"
+                      className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-400 mb-1.5">Password</label>
+                    <div className="relative">
+                      <input
+                        type={showRegSshPassword ? 'text' : 'password'}
+                        value={regSshPassword}
+                        onChange={e => { setRegSshPassword(e.target.value); setRegError(null); }}
+                        placeholder="Enter SSH password"
+                        autoComplete="current-password"
+                        className="w-full px-3 py-2 pr-8 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors"
+                      />
+                      <button type="button" onClick={() => setShowRegSshPassword(v => !v)} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200">
+                        {showRegSshPassword ? <EyeOff size={13} /> : <Eye size={13} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {regType && (
                 <div>
@@ -475,6 +673,22 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
                 </div>
               )}
 
+              {regType && (
+                <div>
+                  <label className="block text-xs font-medium text-gray-400 mb-1.5">
+                    Gateway URL <span className="text-gray-600 font-normal">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={regGatewayUrl}
+                    onChange={e => setRegGatewayUrl(e.target.value)}
+                    placeholder="ws://host:18789"
+                    className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-sm text-gray-100 font-mono focus:outline-none focus:border-blue-500 transition-colors"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">WebSocket address for connecting to the OpenClaw gateway</p>
+                </div>
+              )}
+
               {regError && (
                 <div className="flex items-start gap-2 p-3 bg-red-900/30 border border-red-700/50 rounded text-red-400 text-sm">
                   <AlertCircle size={14} className="flex-shrink-0 mt-0.5" /><span>{regError}</span>
@@ -485,7 +699,7 @@ export default function CreateInstanceModal({ onClose, onCreate }: Props) {
               <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-300 hover:text-gray-100 hover:bg-gray-700 rounded-md transition-colors">Cancel</button>
               <button
                 type="submit"
-                disabled={!regNameValid || !regType || regLoading}
+                disabled={!regNameValid || !regType || regLoading || (regType === 'ssh' && (!regSshHost.trim() || !regSshUsername.trim() || !regSshPassword))}
                 className="flex items-center gap-2 px-4 py-2 text-sm bg-purple-600 hover:bg-purple-500 disabled:bg-purple-900 disabled:text-purple-400 disabled:cursor-not-allowed text-white rounded-md transition-colors"
               >
                 {regLoading ? <><Loader2 size={14} className="animate-spin" />Registering…</> : <><FolderPlus size={14} />Register</>}

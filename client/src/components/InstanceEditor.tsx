@@ -65,6 +65,7 @@ function InstanceInfoPanel({ name, deployType, gatewayToken, createdAt }: {
         <span className={`px-2 py-0.5 rounded text-xs font-medium ${
           deployType === 'local' ? 'bg-green-900/50 text-green-300 border border-green-800' :
           deployType === 'kubernetes' ? 'bg-blue-900/50 text-blue-300 border border-blue-800' :
+          deployType === 'ssh' ? 'bg-purple-900/50 text-purple-300 border border-purple-800' :
           'bg-gray-700 text-gray-300 border border-gray-600'
         }`}>{deployType ?? 'kubernetes'}</span>
       ),
@@ -118,7 +119,7 @@ const FILE_LABELS: Record<YamlFileName, string> = {
 const FORM_SUPPORTED: YamlFileName[] = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml'];
 
 export default function InstanceEditor({ instanceName, deployType, gatewayToken, createdAt, onDeployStart, onDeployEnd }: InstanceEditorProps) {
-  const isLocal = deployType === 'local';
+  const isLocal = deployType === 'local' || deployType === 'ssh';
   const [mainTab, setMainTab] = useState<MainTab>(isLocal ? 'config' : 'info');
   const [deploySucceeded, setDeploySucceeded] = useState(false);
   const [selectedFile, setSelectedFile] = useState<YamlFileName>('deployment.yaml');
@@ -395,8 +396,8 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
         <div className="flex flex-col items-center justify-center flex-1 text-gray-500 gap-3">
           <HardDrive size={32} className="opacity-30" />
           <div className="text-sm text-center">
-            <p className="text-gray-400 font-medium mb-1">Local deployment</p>
-            <p className="text-xs">This instance runs locally via npm. No Kubernetes manifests needed.</p>
+            <p className="text-gray-400 font-medium mb-1">{deployType === 'ssh' ? 'Remote SSH deployment' : 'Local deployment'}</p>
+            <p className="text-xs">{deployType === 'ssh' ? 'This instance runs on a remote server via SSH. No Kubernetes manifests needed.' : 'This instance runs locally via npm. No Kubernetes manifests needed.'}</p>
           </div>
         </div>
       )}

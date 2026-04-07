@@ -114,11 +114,11 @@ export default function App() {
     setSelectedInstance(null);
   };
 
-  const handleCreateInstance = async (name: string, deployType: string, gatewayToken?: string, registerOnly?: boolean) => {
+  const handleCreateInstance = async (name: string, deployType: string, gatewayToken?: string, registerOnly?: boolean, sshCredentials?: { host: string; port: number; username: string; password: string }, gatewayUrl?: string) => {
     const res = await fetch('/api/instances', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders() },
-      body: JSON.stringify({ name, deployType, ...(gatewayToken ? { gatewayToken } : {}), ...(registerOnly ? { registerOnly: true } : {}) }),
+      body: JSON.stringify({ name, deployType, ...(gatewayToken ? { gatewayToken } : {}), ...(registerOnly ? { registerOnly: true } : {}), ...(sshCredentials ? { sshCredentials } : {}), ...(gatewayUrl ? { gatewayUrl } : {}) }),
     });
     if (!res.ok) {
       const data = await res.json() as { error: string };
@@ -252,7 +252,7 @@ export default function App() {
       {createModalOpen && (
         <CreateInstanceModal
           onClose={() => setCreateModalOpen(false)}
-          onCreate={(name, deployType, gatewayToken, registerOnly) => handleCreateInstance(name, deployType, gatewayToken, registerOnly)}
+          onCreate={(name, deployType, gatewayToken, registerOnly, sshCredentials, gatewayUrl) => handleCreateInstance(name, deployType, gatewayToken, registerOnly, sshCredentials, gatewayUrl)}
         />
       )}
     </div>
