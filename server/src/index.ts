@@ -151,12 +151,14 @@ app.get('/api/instances', (_req: Request, res: Response) => {
         let deployType: string | undefined;
         let gatewayToken: string | undefined;
         let createdAt: string | undefined;
+        let description: string | undefined;
         if (fs.existsSync(metaPath)) {
           try {
-            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { deployType?: string; gatewayToken?: string; createdAt?: string };
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as { deployType?: string; gatewayToken?: string; createdAt?: string; description?: string };
             deployType = meta.deployType;
             gatewayToken = meta.gatewayToken;
             createdAt = meta.createdAt;
+            description = meta.description;
           } catch { /* ignore */ }
         }
         return {
@@ -164,6 +166,7 @@ app.get('/api/instances', (_req: Request, res: Response) => {
           deployType: deployType ?? 'kubernetes',
           ...(gatewayToken ? { gatewayToken } : {}),
           ...(createdAt ? { createdAt } : {}),
+          ...(description ? { description } : {}),
           files: YAML_FILES.filter(f => fs.existsSync(path.join(INSTANCES_DIR, e.name, f))),
         };
       });
@@ -257,6 +260,48 @@ app.delete('/api/instances/:name', (req: Request, res: Response) => {
   try {
     fs.rmSync(instanceDir, { recursive: true, force: true });
     return res.json({ success: true });
+  } catch (err) {
+    return res.status(500).json({ error: String(err) });
+  }
+});
+
+// PATCH /api/instances/:name  – update name and/or description
+app.patch('/api/instances/:name', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const { newName, description } = req.body as { newName?: string; description?: string };
+
+  const instanceDir = path.join(INSTANCES_DIR, name);
+  if (!fs.existsSync(instanceDir)) {
+    return res.status(404).json({ error: `Instance "${name}" not found.` });
+  }
+
+  try {
+    let targetDir = instanceDir;
+    let finalName = name;
+
+    if (newName && newName !== name) {
+      if (!/^[a-z0-9-]+$/.test(newName)) {
+        return res.status(400).json({ error: 'Invalid name. Use lowercase letters, numbers, and dashes only.' });
+      }
+      const newDir = path.join(INSTANCES_DIR, newName);
+      if (fs.existsSync(newDir)) {
+        return res.status(409).json({ error: `Instance "${newName}" already exists.` });
+      }
+      fs.renameSync(instanceDir, newDir);
+      targetDir = newDir;
+      finalName = newName;
+      removeClient(name);
+    }
+
+    const metaPath = path.join(targetDir, 'instance.json');
+    const meta = fs.existsSync(metaPath)
+      ? (JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as Record<string, unknown>)
+      : {};
+    meta.name = finalName;
+    if (description !== undefined) meta.description = description;
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+    return res.json({ ok: true, name: finalName });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
@@ -949,22 +994,50 @@ app.get('/api/instances/:name/oc-config/pods', async (req: Request, res: Respons
   try {
     const { stdout } = await spawnCollect('kubectl', args);
     const data = JSON.parse(stdout) as { items: Array<{
-      metadata: { name: string; namespace: string };
+      metadata: { name: string; namespace: string; labels?: Record<string, string>; ownerReferences?: Array<{ kind: string; name: string }> };
       status: { phase: string; containerStatuses?: Array<{ ready: boolean }> };
       spec: { containers: Array<{ name: string }> };
     }> };
-    const pods = data.items.map(p => ({
-      name: p.metadata.name,
-      namespace: p.metadata.namespace,
-      status: p.status.phase,
-      ready: p.status.containerStatuses?.every(c => c.ready) ?? false,
-      containers: p.spec.containers.map(c => c.name),
-    }));
+    const pods = data.items.map(p => {
+      // Derive deployment name: prefer ownerReference ReplicaSet name stripped of its hash suffix,
+      // fall back to the pod's `app` label which our template always sets.
+      let deploymentName = p.metadata.labels?.app ?? '';
+      const rsRef = p.metadata.ownerReferences?.find(r => r.kind === 'ReplicaSet');
+      if (rsRef) {
+        // ReplicaSet name is typically <deployment>-<hash>; strip the last dash-separated segment
+        const parts = rsRef.name.split('-');
+        if (parts.length > 1) deploymentName = parts.slice(0, -1).join('-');
+      }
+      return {
+        name: p.metadata.name,
+        namespace: p.metadata.namespace,
+        status: p.status.phase,
+        ready: p.status.containerStatuses?.every(c => c.ready) ?? false,
+        containers: p.spec.containers.map(c => c.name),
+        deploymentName,
+      };
+    });
     ocLog(name, 'info', 'kubectl', `found ${pods.length} pod(s)`, pods.map(p => `${p.name} (${p.status})`));
     return res.json({ pods });
   } catch (err) {
     ocLog(name, 'error', 'kubectl', `get pods failed: ${String(err)}`);
     return res.status(502).json({ error: String(err) });
+  }
+});
+
+// GET /api/instances/:name/oc-config/local-deployment-name
+// Returns the metadata.name from the local deployment.yaml, or empty string if file absent/unparseable
+app.get('/api/instances/:name/oc-config/local-deployment-name', (req: Request, res: Response) => {
+  const { name } = req.params;
+  const filePath = path.join(INSTANCES_DIR, name, 'deployment.yaml');
+  if (!fs.existsSync(filePath)) return res.json({ deploymentName: '' });
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const yaml = require('js-yaml') as { load: (s: string) => unknown };
+    const doc = yaml.load(fs.readFileSync(filePath, 'utf-8')) as { metadata?: { name?: string } } | null;
+    return res.json({ deploymentName: doc?.metadata?.name ?? '' });
+  } catch {
+    return res.json({ deploymentName: '' });
   }
 });
 

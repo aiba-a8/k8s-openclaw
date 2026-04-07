@@ -6,6 +6,7 @@ export interface Instance {
   deployType?: DeployType;
   gatewayToken?: string;
   createdAt?: string;
+  description?: string;
 }
 
 export interface DeployOutput {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode, Wifi, Info, Eye, EyeOff, Copy, Check, HardDrive } from 'lucide-react';
+import { Save, Rocket, X, Loader2, AlertCircle, CheckCircle, FileCode, Wifi, Info, Eye, EyeOff, Copy, Check, HardDrive, Pencil } from 'lucide-react';
 import { authHeaders } from '../utils/auth';
 import YamlFileEditor from './YamlFileEditor';
 import DeploymentForm from './DeploymentForm';
@@ -17,77 +17,145 @@ interface InstanceEditorProps {
   deployType?: string;
   gatewayToken?: string;
   createdAt?: string;
+  description?: string;
   onDeployStart?: () => void;
   onDeployEnd?: () => void;
+  onRename?: (newName: string) => Promise<void>;
 }
 
 // ── Instance Info Panel ───────────────────────────────────────────────────────
-function InstanceInfoPanel({ name, deployType, gatewayToken, createdAt }: {
+function InstanceInfoPanel({ name, deployType, gatewayToken, createdAt, description: initDescription, onRename }: {
   name: string;
   deployType?: string;
   gatewayToken?: string;
   createdAt?: string;
+  description?: string;
+  onRename?: (newName: string) => Promise<void>;
 }) {
+  const [editName, setEditName] = useState(name);
+  const [editDescription, setEditDescription] = useState(initDescription ?? '');
+  const [gatewayUrl, setGatewayUrl] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+
+  const nameValid = /^[a-z0-9-]+$/.test(editName) && editName.length > 0;
+  const isDirty = editName !== name || editDescription !== (initDescription ?? '');
+
+  // Load gateway URL from connection config
+  useEffect(() => {
+    fetch(`/api/instances/${name}/openclaw/settings`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { url?: string } | null) => { if (d?.url) setGatewayUrl(d.url); });
+  }, [name]);
 
   const copyToken = () => {
     if (!gatewayToken) return;
     const doFallback = () => {
       const ta = document.createElement('textarea');
       ta.value = gatewayToken;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      document.body.removeChild(ta);
+      ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      document.execCommand('copy'); document.body.removeChild(ta);
     };
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(gatewayToken).catch(doFallback);
-    } else {
-      doFallback();
+    if (navigator.clipboard) { navigator.clipboard.writeText(gatewayToken).catch(doFallback); } else { doFallback(); }
+    setCopied(true); setTimeout(() => setCopied(false), 1500);
+  };
+
+  const handleSave = async () => {
+    if (!nameValid || !isDirty || saving) return;
+    setSaving(true); setSaveError(null); setSaveSuccess(false);
+    try {
+      const res = await fetch(`/api/instances/${name}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          ...(editName !== name ? { newName: editName } : {}),
+          description: editDescription,
+        }),
+      });
+      const data = await res.json() as { ok?: boolean; name?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? 'Save failed');
+      setSaveSuccess(true);
+      setTimeout(() => setSaveSuccess(false), 2000);
+      if (data.name && data.name !== name) await onRename?.(data.name);
+    } catch (e) {
+      setSaveError(String(e));
+    } finally {
+      setSaving(false);
     }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
   };
 
-  const fmtDate = (iso?: string) => {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleString();
-  };
-
-  const rows: Array<{ label: string; value: React.ReactNode }> = [
-    { label: 'Name', value: <span className="font-mono text-gray-100">{name}</span> },
-    {
-      label: 'Deploy Type',
-      value: (
-        <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-          deployType === 'local' ? 'bg-green-900/50 text-green-300 border border-green-800' :
-          deployType === 'kubernetes' ? 'bg-blue-900/50 text-blue-300 border border-blue-800' :
-          deployType === 'ssh' ? 'bg-purple-900/50 text-purple-300 border border-purple-800' :
-          'bg-gray-700 text-gray-300 border border-gray-600'
-        }`}>{deployType ?? 'kubernetes'}</span>
-      ),
-    },
-    { label: 'Created', value: <span className="text-gray-300">{fmtDate(createdAt)}</span> },
-  ];
+  const fmtDate = (iso?: string) => iso ? new Date(iso).toLocaleString() : '—';
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
-      <h3 className="text-sm font-semibold text-gray-200 mb-4">Instance Info</h3>
-      <div className="space-y-3 max-w-xl">
-        {rows.map(r => (
-          <div key={r.label} className="flex items-center gap-4 py-2 border-b border-gray-700/50">
-            <span className="text-xs text-gray-500 w-24 flex-shrink-0">{r.label}</span>
-            <div className="text-sm flex-1">{r.value}</div>
+      <div className="flex items-center justify-between mb-5 max-w-xl">
+        <h3 className="text-sm font-semibold text-gray-200">Instance Info</h3>
+        {isDirty && (
+          <button
+            onClick={() => void handleSave()}
+            disabled={!nameValid || saving}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:text-blue-400 text-white rounded-md transition-colors"
+          >
+            {saving ? <Loader2 size={12} className="animate-spin" /> : saveSuccess ? <Check size={12} className="text-green-300" /> : <Save size={12} />}
+            {saving ? 'Saving…' : saveSuccess ? 'Saved' : 'Save'}
+          </button>
+        )}
+      </div>
+
+      <div className="space-y-4 max-w-xl">
+        {/* Name — editable */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1.5 flex items-center gap-1 block">
+            Name <Pencil size={10} className="text-gray-600" />
+          </label>
+          <input
+            value={editName}
+            onChange={e => { setEditName(e.target.value); setSaveError(null); }}
+            className={`w-full bg-gray-900 border rounded px-2.5 py-1.5 text-sm text-gray-100 font-mono focus:outline-none transition-colors ${
+              editName && !nameValid ? 'border-red-500 focus:border-red-400' : 'border-gray-700 focus:border-blue-500'
+            }`}
+          />
+          {editName && !nameValid && <p className="text-xs text-red-400 mt-1">Lowercase letters, numbers, and dashes only</p>}
+        </div>
+
+        {/* Deploy Type — read-only */}
+        <div className="flex items-center gap-4 py-2 border-b border-gray-700/50">
+          <span className="text-xs text-gray-500 w-28 flex-shrink-0">Deploy Type</span>
+          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+            deployType === 'local' ? 'bg-green-900/50 text-green-300 border border-green-800' :
+            deployType === 'kubernetes' ? 'bg-blue-900/50 text-blue-300 border border-blue-800' :
+            deployType === 'ssh' ? 'bg-purple-900/50 text-purple-300 border border-purple-800' :
+            'bg-gray-700 text-gray-300 border border-gray-600'
+          }`}>{deployType ?? 'kubernetes'}</span>
+        </div>
+
+        {/* Created — read-only */}
+        <div className="flex items-center gap-4 py-2 border-b border-gray-700/50">
+          <span className="text-xs text-gray-500 w-28 flex-shrink-0">Created</span>
+          <span className="text-sm text-gray-300">{fmtDate(createdAt)}</span>
+        </div>
+
+        {/* Gateway URL — read-only */}
+        <div className="flex items-start gap-4 py-2 border-b border-gray-700/50">
+          <span className="text-xs text-gray-500 w-28 flex-shrink-0 mt-1">Gateway URL</span>
+          <div className="flex-1 min-w-0">
+            {gatewayUrl
+              ? <code className="text-xs font-mono text-blue-300 break-all">{gatewayUrl}</code>
+              : <span className="text-xs text-gray-600 italic">Not configured — set in Connect tab</span>
+            }
           </div>
-        ))}
+        </div>
+
+        {/* Gateway Token — read-only with show/hide */}
         {gatewayToken && (
           <div className="flex items-start gap-4 py-2 border-b border-gray-700/50">
-            <span className="text-xs text-gray-500 w-24 flex-shrink-0 mt-1">Gateway Token</span>
+            <span className="text-xs text-gray-500 w-28 flex-shrink-0 mt-1">Gateway Token</span>
             <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5">
+              <div className="flex items-center gap-2 bg-gray-900 border border-gray-700 rounded-lg px-3 py-1.5">
                 <code className="flex-1 text-xs font-mono text-green-300 break-all">
                   {showToken ? gatewayToken : '•'.repeat(Math.min(gatewayToken.length, 32))}
                 </code>
@@ -98,8 +166,27 @@ function InstanceInfoPanel({ name, deployType, gatewayToken, createdAt }: {
                   {copied ? <Check size={13} className="text-green-400" /> : <Copy size={13} />}
                 </button>
               </div>
-              <p className="text-xs text-gray-600 mt-1">OPENCLAW_GATEWAY_TOKEN — click eye to reveal</p>
             </div>
+          </div>
+        )}
+
+        {/* Description — editable */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1.5 flex items-center gap-1 block">
+            Description <Pencil size={10} className="text-gray-600" />
+          </label>
+          <textarea
+            value={editDescription}
+            onChange={e => setEditDescription(e.target.value)}
+            rows={3}
+            placeholder="Optional notes about this instance…"
+            className="w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500 transition-colors resize-none placeholder-gray-600"
+          />
+        </div>
+
+        {saveError && (
+          <div className="flex items-center gap-2 text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-3 py-2">
+            <AlertCircle size={12} />{saveError}
           </div>
         )}
       </div>
@@ -118,7 +205,7 @@ const FILE_LABELS: Record<YamlFileName, string> = {
 // Files that have form support
 const FORM_SUPPORTED: YamlFileName[] = ['deployment.yaml', 'service.yaml', 'pvc.yaml', 'configmap.yaml'];
 
-export default function InstanceEditor({ instanceName, deployType, gatewayToken, createdAt, onDeployStart, onDeployEnd }: InstanceEditorProps) {
+export default function InstanceEditor({ instanceName, deployType, gatewayToken, createdAt, description, onDeployStart, onDeployEnd, onRename }: InstanceEditorProps) {
   const isLocal = deployType === 'local' || deployType === 'ssh';
   const [mainTab, setMainTab] = useState<MainTab>(isLocal ? 'config' : 'info');
   const [deploySucceeded, setDeploySucceeded] = useState(false);
@@ -369,6 +456,8 @@ export default function InstanceEditor({ instanceName, deployType, gatewayToken,
           deployType={deployType}
           gatewayToken={gatewayToken}
           createdAt={createdAt}
+          description={description}
+          onRename={onRename}
         />
       )}
 

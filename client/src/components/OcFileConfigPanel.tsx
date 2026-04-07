@@ -36,6 +36,7 @@ interface Pod {
   status: string;
   ready: boolean;
   containers: string[];
+  deploymentName: string;
 }
 
 // ── typed slices of openclaw.json ─────────────────────────────────────────────
@@ -82,6 +83,7 @@ function SourcePanel({
   const [syncResult, setSyncResult] = useState<{ results: Record<string, string>; errors: Record<string, string> } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [podsError, setPodsError] = useState<string | null>(null);
+  const [localDeploymentName, setLocalDeploymentName] = useState('');
   // SSH credentials state
   const [sshCreds, setSshCreds] = useState<SshCreds>({ host: '', port: 22, username: '', password: '' });
   const [showSshPass, setShowSshPass] = useState(false);
@@ -92,6 +94,14 @@ function SourcePanel({
       .then(r => r.json())
       .then((d: OcFileSource) => setSrc({ ...d, type: sourceType }))
       .finally(() => setLoading(false));
+  }, [instanceName, sourceType]);
+
+  // For kubernetes: load the local deployment.yaml metadata.name for mismatch detection
+  useEffect(() => {
+    if (sourceType !== 'kubernetes') return;
+    fetch(`/api/instances/${instanceName}/oc-config/local-deployment-name`, { headers: authHeaders() })
+      .then(r => r.ok ? r.json() : { deploymentName: '' })
+      .then((d: { deploymentName: string }) => setLocalDeploymentName(d.deploymentName ?? ''));
   }, [instanceName, sourceType]);
 
   // Load SSH credentials when type is ssh
@@ -167,6 +177,14 @@ function SourcePanel({
   };
 
   const selectedPod = pods.find(p => p.name === src.pod);
+  // Mismatch: local deployment.yaml has a name AND the selected pod belongs to a different deployment
+  const deploymentMismatch = !!(
+    src.pod &&
+    selectedPod &&
+    localDeploymentName &&
+    selectedPod.deploymentName &&
+    selectedPod.deploymentName !== localDeploymentName
+  );
 
   if (loading) return <div className="flex items-center gap-2 p-4 text-gray-500 text-xs"><Loader2 size={14} className="animate-spin" />Loading...</div>;
 
@@ -208,8 +226,15 @@ function SourcePanel({
           {podsError && <p className="text-xs text-red-400 flex items-center gap-1"><AlertCircle size={12} />{podsError}</p>}
 
           {pods.length > 0 && (
-            <div>
-              <label className="text-xs text-gray-400 mb-1 block">Pod</label>
+            <div className="space-y-1.5">
+              <label className="text-xs text-gray-400 mb-1 block">
+                Pod
+                {localDeploymentName && (
+                  <span className="ml-2 text-gray-600 font-normal">
+                    (local deployment: <code className="text-gray-400">{localDeploymentName}</code>)
+                  </span>
+                )}
+              </label>
               <div className="relative">
                 <select
                   value={src.pod ?? ''}
@@ -217,17 +242,27 @@ function SourcePanel({
                     const pod = pods.find(p => p.name === e.target.value);
                     setSrc(s => ({ ...s, pod: e.target.value, container: pod?.containers[0] }));
                   }}
-                  className="w-full appearance-none bg-gray-900 border border-gray-600 rounded px-2.5 py-1.5 text-xs text-gray-100 focus:outline-none focus:border-blue-500 pr-7"
+                  className={`w-full appearance-none bg-gray-900 border rounded px-2.5 py-1.5 text-xs text-gray-100 focus:outline-none pr-7 ${
+                    deploymentMismatch ? 'border-red-600 focus:border-red-500' : 'border-gray-600 focus:border-blue-500'
+                  }`}
                 >
                   <option value="">Select pod...</option>
                   {pods.map(p => (
                     <option key={p.name} value={p.name}>
-                      {p.name} ({p.status}{p.ready ? ' ✓' : ''})
+                      {p.name} ({p.status}{p.ready ? ' ✓' : ''}{p.deploymentName ? ` · ${p.deploymentName}` : ''})
                     </option>
                   ))}
                 </select>
                 <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
               </div>
+              {deploymentMismatch && (
+                <div className="flex items-start gap-1.5 text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded px-2.5 py-2">
+                  <AlertCircle size={12} className="flex-shrink-0 mt-0.5" />
+                  <span>
+                    Pod belongs to deployment <code className="text-red-300">{selectedPod?.deploymentName}</code>, but local deployment.yaml is <code className="text-red-300">{localDeploymentName}</code>. Loading is blocked to prevent config mismatch.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -339,7 +374,7 @@ function SourcePanel({
       <div className="flex items-center gap-2 flex-wrap">
         <button
           onClick={() => void fetchFile()}
-          disabled={fetching || savingCreds || (src.type === 'kubernetes' && !src.pod) || (src.type === 'ssh' && !sshCreds.host)}
+          disabled={fetching || savingCreds || (src.type === 'kubernetes' && !src.pod) || (src.type === 'ssh' && !sshCreds.host) || deploymentMismatch}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:text-blue-400 text-white text-xs rounded transition-colors"
         >
           {fetching ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}

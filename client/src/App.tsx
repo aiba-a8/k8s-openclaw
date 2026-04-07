@@ -176,8 +176,10 @@ export default function App() {
               deployType={instances.find(i => i.name === selectedInstance)?.deployType}
               gatewayToken={instances.find(i => i.name === selectedInstance)?.gatewayToken}
               createdAt={instances.find(i => i.name === selectedInstance)?.createdAt}
+              description={instances.find(i => i.name === selectedInstance)?.description}
               onDeployStart={() => { setDeployingInstance(selectedInstance); setBottomTab('logs'); setTerminalOpen(true); }}
               onDeployEnd={() => setDeployingInstance(null)}
+              onRename={async (newName) => { setSelectedInstance(newName); await fetchInstances(); }}
             />
           ) : (
             <div className="flex flex-col items-center justify-center flex-1 text-gray-500">
